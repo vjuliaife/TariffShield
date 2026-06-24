@@ -8,6 +8,7 @@ import { migrate } from "./db.js";
 import { authRouter } from "./routes/auth.js";
 import { importersRouter } from "./routes/importers.js";
 import { startIndexer } from "./indexer.js";
+import { startReconciliationJob } from "./jobs/reconcile-balances.js";
 
 const app = express();
 
@@ -262,6 +263,7 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
 async function start() {
   await migrate();
   await startIndexer();
+  startReconciliationJob();
   app.listen(env.PORT, () => {
     console.log(`[boot] tariffshield API on :${env.PORT}`);
     console.log(`[boot] contract: ${env.TARIFF_SHIELD_CONTRACT_ID}`);

@@ -78,3 +78,22 @@ export async function getCurrentLedgerSequence(): Promise<number> {
     throw err;
   }
 }
+
+/**
+ * Pings the Soroban RPC server to check if it's reachable.
+ */
+export async function pingRpc(): Promise<void> {
+  const server = createRpcServer(env.STELLAR_RPC_URL);
+  await server.getNetwork();
+}
+
+/**
+ * Retrieves the current balance for a bond directly from the Soroban contract.
+ * @param bondId The unique identifier for the bond.
+ * @returns The on-chain balance as a string.
+ */
+export async function getBondOnChain(bondId: string): Promise<string> {
+  // Use the contractClient proxy which already has metric instrumentation
+  const bond = await contractClient.get_bond({ id: bondId });
+  return bond.balance.toString();
+}

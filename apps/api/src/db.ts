@@ -29,6 +29,7 @@ export async function migrate(): Promise<void> {
       bond_id BIGINT UNIQUE NOT NULL,
       stellar_address TEXT NOT NULL,
       stellar_secret_encrypted TEXT,
+      collateral_balance NUMERIC(20, 0) NOT NULL DEFAULT 0,
       registered_on_chain_tx TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
@@ -84,4 +85,24 @@ export async function updateLastProcessedLedger(ledger: number): Promise<void> {
          updated_at = now()`,
     ["default", ledger]
   );
+}
+
+/**
+ * Pings the database to check if it's alive.
+ */
+export async function ping(): Promise<void> {
+  await pool.query("SELECT 1");
+}
+
+/**
+ * Returns all bonds that have been registered on-chain.
+ */
+export async function getActiveBonds(): Promise<{ bondId: string; dbBalance: string }[]> {
+  const result = await pool.query(
+    "SELECT bond_id, collateral_balance FROM importers WHERE registered_on_chain_tx IS NOT NULL"
+  );
+  return result.rows.map((row) => ({
+    bondId: row.bond_id,
+    dbBalance: row.collateral_balance,
+  }));
 }
