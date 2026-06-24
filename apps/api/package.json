@@ -9,6 +9,8 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "@sentry/node": "^10.60.0",
+    "@sentry/profiling-node": "^10.60.0",
     "@stellar/stellar-sdk": "^15.0.0",
     "@tariffshield/sdk": "*",
     "bcryptjs": "^3.0.0",

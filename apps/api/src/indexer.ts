@@ -1,5 +1,6 @@
 import { pino } from "pino";
 import client from "prom-client";
+import * as Sentry from "@sentry/node";
 import { getCurrentLedgerSequence } from "./stellar.js";
 import { getLastProcessedLedger, updateLastProcessedLedger } from "./db.js";
 
@@ -32,6 +33,7 @@ export async function startIndexer(): Promise<void> {
     await checkLagAndIndex();
   } catch (err) {
     logger.error({ err }, "[indexer] First check failed");
+    Sentry.captureException(err);
   }
 
   // Poll every 30 seconds
@@ -40,6 +42,7 @@ export async function startIndexer(): Promise<void> {
       await checkLagAndIndex();
     } catch (err) {
       logger.error({ err }, "[indexer] Error in contract event indexer monitoring cycle");
+      Sentry.captureException(err);
     }
   }, 30000);
 }

@@ -1,3 +1,5 @@
+import "./instrument.js";
+import * as Sentry from "@sentry/node";
 import express, { type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -253,6 +255,8 @@ app.use("/auth/signup", authLimiter);
 app.use("/auth/login", authLimiter);
 app.use("/auth", authRouter);
 app.use("/importers", importersRouter);
+
+Sentry.setupExpressErrorHandler(app);
 
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
   console.error("[error]", err);
