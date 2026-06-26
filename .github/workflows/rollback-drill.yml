@@ -1,0 +1,85 @@
+name: Monthly Rollback Drill
+
+on:
+  schedule:
+    # Run on the first day of every month at 10:00 UTC
+    - cron: "0 10 1 * *"
+  workflow_dispatch: # Allow manual triggers
+
+jobs:
+  rollback-drill:
+    runs-on: ubuntu-latest
+    environment: testnet
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify deployment history exists
+        run: |
+          if [ ! -f deployments/history.json ]; then
+            echo "ERROR: deployments/history.json not found"
+            exit 1
+          fi
+
+          # Check if there are at least 2 deployments for rollback drill
+          DEPLOYMENT_COUNT=$(jq 'length' deployments/history.json)
+          if [ "$DEPLOYMENT_COUNT" -lt 2 ]; then
+            echo "INFO: Only $DEPLOYMENT_COUNT deployment(s) in history. Need at least 2 for rollback drill."
+            echo "Skipping rollback drill this month."
+            exit 0
+          fi
+
+      - name: List available wasm hashes
+        env:
+          TARIFF_SHIELD_CONTRACT_ID: ${{ secrets.TESTNET_CONTRACT_ID }}
+          STELLAR_NETWORK: testnet
+        run: npm run list-wasm-hashes
+
+      - name: Perform rollback drill
+        env:
+          TARIFF_SHIELD_CONTRACT_ID: ${{ secrets.TESTNET_CONTRACT_ID }}
+          STELLAR_RPC_URL: https://soroban-testnet.stellar.org
+          STELLAR_NETWORK_PASSPHRASE: Test SDF Network ; September 2015
+          PLATFORM_STELLAR_SECRET: ${{ secrets.TESTNET_ADMIN_SECRET }}
+        run: |
+          # Get the second-most-recent wasm hash (previous version)
+          PREVIOUS_HASH=$(jq -r '.[1].wasmHash' deployments/history.json)
+
+          if [ "$PREVIOUS_HASH" = "null" ] || [ -z "$PREVIOUS_HASH" ]; then
+            echo "ERROR: Could not extract previous wasm hash"
+            exit 1
+          fi
+
+          echo "Attempting rollback to wasm hash: $PREVIOUS_HASH"
+          npm run rollback-upgrade -- --previous-wasm-hash "$PREVIOUS_HASH"
+
+      - name: Verify rollback success
+        env:
+          TARIFF_SHIELD_CONTRACT_ID: ${{ secrets.TESTNET_CONTRACT_ID }}
+          STELLAR_RPC_URL: https://soroban-testnet.stellar.org
+          STELLAR_NETWORK_PASSPHRASE: Test SDF Network ; September 2015
+        run: |
+          npm run verify-upgrade -- --skip-canary
+
+      - name: Upload verification report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rollback-drill-report
+          path: verification-reports/
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "Rollback drill FAILED. Manual intervention required."
+          echo "Review the verification report artifact for details."

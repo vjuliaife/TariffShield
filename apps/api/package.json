@@ -9,6 +9,14 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/auto-instrumentations-node": "^0.56.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.57.0",
+    "@opentelemetry/resources": "^1.30.0",
+    "@opentelemetry/sdk-node": "^0.57.0",
+    "@opentelemetry/semantic-conventions": "^1.30.0",
+    "@sentry/node": "^10.60.0",
+    "@sentry/profiling-node": "^10.60.0",
     "@stellar/stellar-sdk": "^15.0.0",
     "@tariffshield/sdk": "*",
     "bcryptjs": "^3.0.0",

@@ -11,4 +11,9 @@ pub enum Error {
     InvalidAmount = 5,
     CollateralBelowRequired = 6,
     AccountFrozen = 7,
+    NotAnAdmin = 8,
+    ProposalNotFound = 9,
+    ProposalExpired = 10,
+    AlreadyVoted = 11,
+    StaleOracleError = 12,
 }

@@ -9,8 +9,8 @@
 //!   - is_clawbacked          frozen state after surety enforcement
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, panic_with_error, symbol_short, token, Address, Env,
-    Symbol,
+    contract, contractimpl, contracttype, panic_with_error, symbol_short, token, Address, BytesN, Env,
+    Symbol, Vec,
 };
 
 mod errors;
@@ -24,10 +24,20 @@ pub struct TariffShieldContract;
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
-    Admin,
+    Admins,
     Surety,
     Token,
     Account(Address),
+    Proposal(u64),
+    ProposalCounter,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Proposal {
+    pub new_wasm_hash: BytesN<32>,
+    pub approvals: Vec<Address>,
+    pub expiry_ledger: u32,
 }
 
 #[contracttype]
@@ -39,18 +49,22 @@ pub struct Account {
     pub reserve_balance: i128,
     pub yield_accrued: i128,
     pub is_clawbacked: bool,
+    pub collateral_last_updated: u64,
 }
 
 #[contractimpl]
 impl TariffShieldContract {
-    pub fn initialize(env: Env, admin: Address, surety: Address, token: Address) {
-        if env.storage().instance().has(&DataKey::Admin) {
+    pub fn initialize(env: Env, admins: Vec<Address>, surety: Address, token: Address) {
+        if env.storage().instance().has(&DataKey::Admins) {
             panic_with_error!(&env, Error::AlreadyInitialized);
         }
-        admin.require_auth();
-        env.storage().instance().set(&DataKey::Admin, &admin);
+        for admin in admins.iter() {
+            admin.require_auth();
+        }
+        env.storage().instance().set(&DataKey::Admins, &admins);
         env.storage().instance().set(&DataKey::Surety, &surety);
         env.storage().instance().set(&DataKey::Token, &token);
+        env.storage().instance().set(&DataKey::ProposalCounter, &0u64);
     }
 
     pub fn register_importer(env: Env, importer: Address, bond_id: u64, required_collateral: i128) {
@@ -70,6 +84,7 @@ impl TariffShieldContract {
             reserve_balance: 0,
             yield_accrued: 0,
             is_clawbacked: false,
+            collateral_last_updated: env.ledger().timestamp(),
         };
         env.storage().persistent().set(&key, &account);
         env.events().publish(
@@ -85,6 +100,7 @@ impl TariffShieldContract {
         }
         let mut acct = load_account(&env, &importer);
         require_active(&env, &acct);
+        require_fresh_collateral(&env, &importer, &acct);
         let token_addr = get_token(&env);
         token::Client::new(&env, &token_addr).transfer(
             &from,
@@ -106,6 +122,7 @@ impl TariffShieldContract {
         }
         let mut acct = load_account(&env, &importer);
         require_active(&env, &acct);
+        require_fresh_collateral(&env, &importer, &acct);
         let token_addr = get_token(&env);
         token::Client::new(&env, &token_addr).transfer(
             &from,
@@ -129,6 +146,7 @@ impl TariffShieldContract {
         let mut acct = load_account(&env, &importer);
         let old_required = acct.required_collateral;
         acct.required_collateral = new_required;
+        acct.collateral_last_updated = env.ledger().timestamp();
         save_account(&env, &importer, &acct);
         env.events().publish(
             (symbol_short!("required"), importer.clone()),
@@ -165,6 +183,7 @@ impl TariffShieldContract {
         }
         let mut acct = load_account(&env, &importer);
         require_active(&env, &acct);
+        require_fresh_collateral(&env, &importer, &acct);
         let excess = acct.collateral_balance - acct.required_collateral;
         if amount > excess {
             panic_with_error!(&env, Error::CollateralBelowRequired);
@@ -224,8 +243,75 @@ impl TariffShieldContract {
         total
     }
 
+    pub fn propose_upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) -> u64 {
+        require_admin(&env, &caller);
+        caller.require_auth();
+
+        let counter: u64 = env.storage().instance().get(&DataKey::ProposalCounter).unwrap_or(0);
+        let proposal_id = counter + 1;
+        env.storage().instance().set(&DataKey::ProposalCounter, &proposal_id);
+
+        let mut approvals = Vec::new(&env);
+        approvals.push_back(caller.clone());
+
+        let expiry_ledger = env.ledger().sequence() + 17280; // ~1 day at 5s/ledger
+
+        let proposal = Proposal {
+            new_wasm_hash,
+            approvals,
+            expiry_ledger,
+        };
+        env.storage().persistent().set(&DataKey::Proposal(proposal_id), &proposal);
+
+        proposal_id
+    }
+
+    pub fn approve_upgrade(env: Env, caller: Address, proposal_id: u64) {
+        require_admin(&env, &caller);
+        caller.require_auth();
+
+        let key = DataKey::Proposal(proposal_id);
+        let mut proposal: Proposal = env.storage().persistent().get(&key).unwrap_or_else(|| {
+            panic_with_error!(&env, Error::ProposalNotFound)
+        });
+
+        if env.ledger().sequence() > proposal.expiry_ledger {
+            env.storage().persistent().remove(&key);
+            panic_with_error!(&env, Error::ProposalExpired);
+        }
+
+        if proposal.approvals.contains(caller.clone()) {
+            panic_with_error!(&env, Error::AlreadyVoted);
+        }
+
+        proposal.approvals.push_back(caller);
+
+        if proposal.approvals.len() >= 2 {
+            env.deployer().update_current_contract_wasm(proposal.new_wasm_hash);
+            env.storage().persistent().remove(&key);
+        } else {
+            env.storage().persistent().set(&key, &proposal);
+        }
+    }
+
+    pub fn cancel_upgrade(env: Env, caller: Address, proposal_id: u64) {
+        require_admin(&env, &caller);
+        caller.require_auth();
+
+        let key = DataKey::Proposal(proposal_id);
+        if !env.storage().persistent().has(&key) {
+            panic_with_error!(&env, Error::ProposalNotFound);
+        }
+        env.storage().persistent().remove(&key);
+    }
+
     pub fn get_account(env: Env, importer: Address) -> Account {
         load_account(&env, &importer)
+    }
+
+    pub fn is_collateral_stale(env: Env, account_id: Address) -> bool {
+        let acct = load_account(&env, &account_id);
+        is_stale(&env, &acct)
     }
 
     pub fn get_admin(env: Env) -> Address {
@@ -244,10 +330,21 @@ impl TariffShieldContract {
 }
 
 fn get_admin(env: &Env) -> Address {
-    env.storage()
+    let admins: Vec<Address> = env.storage()
         .instance()
-        .get(&DataKey::Admin)
-        .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized))
+        .get(&DataKey::Admins)
+        .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized));
+    admins.get(0).unwrap()
+}
+
+fn require_admin(env: &Env, caller: &Address) {
+    let admins: Vec<Address> = env.storage()
+        .instance()
+        .get(&DataKey::Admins)
+        .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized));
+    if !admins.contains(caller.clone()) {
+        panic_with_error!(env, Error::NotAnAdmin);
+    }
 }
 
 fn get_surety(env: &Env) -> Address {
@@ -282,3 +379,16 @@ fn require_active(env: &Env, acct: &Account) {
         panic_with_error!(env, Error::AccountFrozen);
     }
 }
+
+fn is_stale(env: &Env, acct: &Account) -> bool {
+    env.ledger().timestamp() > acct.collateral_last_updated + 365 * 86400
+}
+
+fn require_fresh_collateral(env: &Env, importer: &Address, acct: &Account) {
+    if is_stale(env, acct) {
+        let expiry = acct.collateral_last_updated + 365 * 86400;
+        env.events().publish((symbol_short!("stale"), importer.clone()), expiry);
+        panic_with_error!(env, Error::StaleOracleError);
+    }
+}
+

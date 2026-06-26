@@ -1,7 +1,7 @@
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import type { NextFunction, Request, Response } from "express";
-import { env } from "./env.js";
+import { env } from "./config/env.js";
 
 export interface AuthPayload {
   id: string;

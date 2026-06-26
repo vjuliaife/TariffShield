@@ -1,14 +1,19 @@
+import "./tracing.js";
+import "./instrument.js";
+import * as Sentry from "@sentry/node";
 import express, { type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import client from "prom-client";
-import { env, isProduction } from "./env.js";
+import { env, isProduction } from "./config/env.js";
 import { migrate } from "./db.js";
 import { authRouter } from "./routes/auth.js";
 import { importersRouter } from "./routes/importers.js";
+import { adminRouter } from "./routes/admin.js";
 import { startIndexer } from "./indexer.js";
 import { startReconciliationJob } from "./jobs/reconcile-balances.js";
+import { startOracleMonitor } from "./services/oracle-monitor.js";
 
 const app = express();
 
@@ -254,6 +259,9 @@ app.use("/auth/signup", authLimiter);
 app.use("/auth/login", authLimiter);
 app.use("/auth", authRouter);
 app.use("/importers", importersRouter);
+app.use("/admin", adminRouter);
+
+Sentry.setupExpressErrorHandler(app);
 
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
   console.error("[error]", err);
@@ -264,6 +272,7 @@ async function start() {
   await migrate();
   await startIndexer();
   startReconciliationJob();
+  await startOracleMonitor();
   app.listen(env.PORT, () => {
     console.log(`[boot] tariffshield API on :${env.PORT}`);
     console.log(`[boot] contract: ${env.TARIFF_SHIELD_CONTRACT_ID}`);

@@ -1,8 +1,11 @@
 import { Keypair } from "@stellar/stellar-sdk";
 import { TariffShieldClient } from "@tariffshield/sdk";
 import client from "prom-client";
-import { env } from "./env.js";
+import { trace, SpanStatusCode } from "@opentelemetry/api";
+import { env } from "./config/env.js";
 import { createRpcServer } from "./lib/soroban/rpcClient.js";
+
+const tracer = trace.getTracer("tariffshield-stellar");
 
 export const platformKeypair = Keypair.fromSecret(env.PLATFORM_STELLAR_SECRET);
 export const suretyKeypair = Keypair.fromSecret(env.SURETY_STELLAR_SECRET);
@@ -35,21 +38,31 @@ export const contractClient = new Proxy(baseClient, {
     if (typeof original === "function") {
       return async (...args: any[]) => {
         const methodName = String(prop);
-        const start = process.hrtime();
-        try {
-          const result = await original.apply(target, args);
-          const diff = process.hrtime(start);
-          const duration = diff[0] + diff[1] / 1e9;
-          sorobanRpcCallsTotal.inc({ method: methodName, success: "true" });
-          sorobanRpcDurationSeconds.observe({ method: methodName }, duration);
-          return result;
-        } catch (err) {
-          const diff = process.hrtime(start);
-          const duration = diff[0] + diff[1] / 1e9;
-          sorobanRpcCallsTotal.inc({ method: methodName, success: "false" });
-          sorobanRpcDurationSeconds.observe({ method: methodName }, duration);
-          throw err;
-        }
+        return tracer.startActiveSpan(`soroban.rpc.${methodName}`, async (span) => {
+          span.setAttributes({
+            "soroban.method": methodName,
+            "soroban.network": env.STELLAR_NETWORK_PASSPHRASE,
+          });
+          const start = process.hrtime();
+          try {
+            const result = await original.apply(target, args);
+            const diff = process.hrtime(start);
+            const duration = diff[0] + diff[1] / 1e9;
+            sorobanRpcCallsTotal.inc({ method: methodName, success: "true" });
+            sorobanRpcDurationSeconds.observe({ method: methodName }, duration);
+            span.setStatus({ code: SpanStatusCode.OK });
+            return result;
+          } catch (err) {
+            const diff = process.hrtime(start);
+            const duration = diff[0] + diff[1] / 1e9;
+            sorobanRpcCallsTotal.inc({ method: methodName, success: "false" });
+            sorobanRpcDurationSeconds.observe({ method: methodName }, duration);
+            span.setStatus({ code: SpanStatusCode.ERROR, message: String(err) });
+            throw err;
+          } finally {
+            span.end();
+          }
+        });
       };
     }
     return original;
@@ -62,21 +75,31 @@ export const explorerTx = (hash: string): string =>
 export async function getCurrentLedgerSequence(): Promise<number> {
   const server = createRpcServer(env.STELLAR_RPC_URL);
   const methodName = "getLatestLedger";
-  const start = process.hrtime();
-  try {
-    const latest = await server.getLatestLedger();
-    const diff = process.hrtime(start);
-    const duration = diff[0] + diff[1] / 1e9;
-    sorobanRpcCallsTotal.inc({ method: methodName, success: "true" });
-    sorobanRpcDurationSeconds.observe({ method: methodName }, duration);
-    return latest.sequence;
-  } catch (err) {
-    const diff = process.hrtime(start);
-    const duration = diff[0] + diff[1] / 1e9;
-    sorobanRpcCallsTotal.inc({ method: methodName, success: "false" });
-    sorobanRpcDurationSeconds.observe({ method: methodName }, duration);
-    throw err;
-  }
+  return tracer.startActiveSpan(`soroban.rpc.${methodName}`, async (span) => {
+    span.setAttributes({
+      "soroban.method": methodName,
+      "soroban.network": env.STELLAR_NETWORK_PASSPHRASE,
+    });
+    const start = process.hrtime();
+    try {
+      const latest = await server.getLatestLedger();
+      const diff = process.hrtime(start);
+      const duration = diff[0] + diff[1] / 1e9;
+      sorobanRpcCallsTotal.inc({ method: methodName, success: "true" });
+      sorobanRpcDurationSeconds.observe({ method: methodName }, duration);
+      span.setStatus({ code: SpanStatusCode.OK });
+      return latest.sequence;
+    } catch (err) {
+      const diff = process.hrtime(start);
+      const duration = diff[0] + diff[1] / 1e9;
+      sorobanRpcCallsTotal.inc({ method: methodName, success: "false" });
+      sorobanRpcDurationSeconds.observe({ method: methodName }, duration);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: String(err) });
+      throw err;
+    } finally {
+      span.end();
+    }
+  });
 }
 
 /**

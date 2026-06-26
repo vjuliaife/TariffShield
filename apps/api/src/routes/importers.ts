@@ -4,6 +4,9 @@ import { z } from "zod";
 import { pool } from "../db.js";
 import { authMiddleware, type AuthedRequest } from "../auth.js";
 import { contractClient, explorerTx, platformKeypair, suretyKeypair } from "../stellar.js";
+import { lookupCbpDutyRate } from "../services/cbp-duty-lookup.js";
+import { screenImporterEntity, screenWalletAddress } from "../services/aml-screening.js";
+import { env } from "../config/env.js";
 
 export const importersRouter = Router();
 importersRouter.use(authMiddleware);
@@ -29,6 +32,12 @@ importersRouter.post("/", async (req: Request, res: Response) => {
   }
   const { legalName, ein, bondId, initialRequiredCollateral } = parse.data;
 
+  const ofacClear = await screenImporterEntity(legalName, ein);
+  if (!ofacClear) {
+    res.status(403).json({ error: "Importer failed OFAC sanctions screening" });
+    return;
+  }
+
   const existing = await pool.query("SELECT id FROM importers WHERE user_id = $1", [user.id]);
   if (existing.rowCount && existing.rowCount > 0) {
     res.status(409).json({ error: "importer already registered for this user" });
@@ -37,13 +46,19 @@ importersRouter.post("/", async (req: Request, res: Response) => {
 
   const kp = Keypair.random();
 
+  const amlRes = await screenWalletAddress(kp.publicKey());
+  if (amlRes.riskScore === "HIGH") {
+    res.status(403).json({ error: "Wallet address flagged as high risk by AML provider" });
+    return;
+  }
+
   const inserted = await pool.query(
     `INSERT INTO importers (user_id, legal_name, ein, bond_id, stellar_address, stellar_secret_encrypted)
      VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING id, legal_name, ein, bond_id, stellar_address, created_at`,
     [user.id, legalName, ein ?? null, bondId, kp.publicKey(), kp.secret()],
   );
-  const importer = inserted.rows[0];
+  const importer = inserted.rows[0]!;
 
   // Fund the importer account via friendbot (testnet only)
   try {
@@ -157,11 +172,35 @@ importersRouter.get("/:id", async (req: Request, res: Response) => {
   });
 });
 
+importersRouter.get("/:id/collateral-status", async (req: Request, res: Response) => {
+  const importer = await loadImporterFor(req, String(req.params.id ?? ""));
+  if (!importer) {
+    res.status(404).json({ error: "not found" });
+    return;
+  }
+  const acct = await contractClient.getAccount(importer.stellar_address);
+  const lastUpdatedSeconds = Number(acct.collateralLastUpdated);
+  const expiresAtSeconds = lastUpdatedSeconds + 365 * 86400;
+  const stale = Math.floor(Date.now() / 1000) > expiresAtSeconds;
+  res.json({
+    stale,
+    lastUpdated: new Date(lastUpdatedSeconds * 1000).toISOString(),
+    expiresAt: new Date(expiresAtSeconds * 1000).toISOString(),
+  });
+});
+
+
 // --- Synthetic CBP tariff CSV upload — recomputes required_collateral on-chain ---
+
+const TariffLineItemSchema = z.object({
+  htsCode: z.string(),
+  value: z.coerce.number().positive(),
+  dutyRate: z.coerce.number().min(0),
+});
 
 const TariffUploadSchema = z.object({
   filename: z.string().optional(),
-  annualDutyTotal: z.coerce.number().positive(),
+  lineItems: z.array(TariffLineItemSchema),
 });
 
 importersRouter.post("/:id/upload-tariff-csv", async (req: Request, res: Response) => {
@@ -172,12 +211,41 @@ importersRouter.post("/:id/upload-tariff-csv", async (req: Request, res: Respons
   }
   const parse = TariffUploadSchema.safeParse(req.body);
   if (!parse.success) {
-    res.status(400).json({ error: "invalid input" });
+    res.status(400).json({ error: "invalid input", details: parse.error.issues });
     return;
   }
+
+  let annualDutyTotal = 0;
+  const validationReport = [];
+  let hasBlockError = false;
+
+  for (const item of parse.data.lineItems) {
+    const cbpRes = await lookupCbpDutyRate(item.htsCode);
+    const cbpRate = cbpRes.dutyRate ?? item.dutyRate;
+    
+    const deviation = Math.abs(cbpRate - item.dutyRate);
+    if (cbpRate > 0 && deviation / cbpRate > 0.10) {
+      validationReport.push({
+        htsCode: item.htsCode,
+        reportedRate: item.dutyRate,
+        cbpRate: cbpRate,
+        deviation,
+      });
+      if (env.CBP_VALIDATION_MODE !== "warn") {
+        hasBlockError = true;
+      }
+    }
+    annualDutyTotal += item.value * item.dutyRate;
+  }
+
+  if (hasBlockError) {
+    res.status(422).json({ error: "CBP validation failed", report: validationReport });
+    return;
+  }
+
   // CBP rule of thumb: continuous bond face value ~= 10% of annual duties+taxes+fees.
   // We require importer to collateralize 50% of bond face value (industry-typical cash collateral demand for new importers).
-  const bondFaceValue = parse.data.annualDutyTotal * 0.1;
+  const bondFaceValue = annualDutyTotal * 0.1;
   const requiredCollateralUSD = bondFaceValue * 0.5;
   // Token is XLM in the demo (1 USD ≈ 1 XLM for stand-in); 7 decimals.
   const requiredStroops = BigInt(Math.round(requiredCollateralUSD * 1e7));
@@ -189,7 +257,7 @@ importersRouter.post("/:id/upload-tariff-csv", async (req: Request, res: Respons
   );
   await pool.query(
     "INSERT INTO tariff_uploads (importer_id, filename, annual_duty_total, computed_required_collateral, applied_tx) VALUES ($1, $2, $3, $4, $5)",
-    [importer.id, parse.data.filename ?? null, parse.data.annualDutyTotal, requiredStroops.toString(), onChain.txHash],
+    [importer.id, parse.data.filename ?? null, annualDutyTotal, requiredStroops.toString(), onChain.txHash],
   );
   await pool.query(
     "INSERT INTO contract_events (importer_id, kind, amount, tx_hash) VALUES ($1, 'required_changed', $2, $3)",
@@ -197,7 +265,7 @@ importersRouter.post("/:id/upload-tariff-csv", async (req: Request, res: Respons
   );
 
   res.json({
-    annualDutyTotal: parse.data.annualDutyTotal,
+    annualDutyTotal,
     bondFaceValue,
     requiredCollateralStroops: requiredStroops.toString(),
     txHash: onChain.txHash,
@@ -221,6 +289,13 @@ importersRouter.post("/:id/deposit", async (req: Request, res: Response) => {
     res.status(400).json({ error: "invalid input" });
     return;
   }
+
+  const amlRes = await screenWalletAddress(importer.stellar_address);
+  if (amlRes.riskScore === "HIGH") {
+    res.status(403).json({ error: "Transaction blocked pending AML review" });
+    return;
+  }
+
   const amount = BigInt(parse.data.amountStroops);
   const importerKp = Keypair.fromSecret(importer.stellar_secret_encrypted);
 
@@ -270,6 +345,13 @@ importersRouter.post("/:id/withdraw", async (req: Request, res: Response) => {
     res.status(400).json({ error: "invalid input" });
     return;
   }
+
+  const amlRes = await screenWalletAddress(importer.stellar_address);
+  if (amlRes.riskScore === "HIGH") {
+    res.status(403).json({ error: "Transaction blocked pending AML review" });
+    return;
+  }
+
   const importerKp = Keypair.fromSecret(importer.stellar_secret_encrypted);
   const onChain = await contractClient.withdrawCollateral(
     importerKp,

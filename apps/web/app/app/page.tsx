@@ -5,8 +5,9 @@ import { useEffect, useState } from "react";
 import { Nav } from "@/components/Nav";
 import { api, ApiError, type Importer, type ImporterDetail, stroopsToXlm } from "@/lib/api";
 import { getUser, isAuthenticated } from "@/lib/auth";
+import * as Sentry from "@sentry/nextjs";
 
-export default function ImporterDashboard() {
+function ImporterDashboard() {
   const router = useRouter();
   const [importer, setImporter] = useState<Importer | null>(null);
   const [detail, setDetail] = useState<ImporterDetail | null>(null);
@@ -342,3 +343,17 @@ function Field({ label, type = "text", value, onChange, placeholder, required }:
     </label>
   );
 }
+
+export default Sentry.withErrorBoundary(ImporterDashboard, {
+  fallback: ({ error }: { error: any }) => (
+    <div className="max-w-md mx-auto px-6 py-20 text-center">
+      <h1 className="text-2xl font-semibold tracking-tight text-danger">Something went wrong</h1>
+      <p className="mt-2 text-sm text-muted">An unexpected client-side error occurred. The engineering team has been notified.</p>
+      {error && (
+        <pre className="mt-4 p-3 rounded bg-card border border-border text-xs text-muted overflow-auto font-mono text-left">
+          {String(error.message || error)}
+        </pre>
+      )}
+    </div>
+  ),
+});

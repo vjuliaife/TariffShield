@@ -1,0 +1,17 @@
+# docker-compose.override.yml — hot-reload mounts for local development.
+# Applied automatically by docker-compose alongside docker-compose.yml.
+# Do not check secrets into this file; use apps/api/.env instead.
+services:
+  api:
+    volumes:
+      - ./apps/api/src:/app/src:delegated
+    command: ["npx", "tsx", "watch", "src/index.ts"]
+
+  web:
+    volumes:
+      - ./apps/web/src:/app/src:delegated
+      - ./apps/web/app:/app/app:delegated
+      - ./apps/web/components:/app/components:delegated
+      - ./apps/web/lib:/app/lib:delegated
+    environment:
+      NODE_ENV: development

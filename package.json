@@ -16,7 +16,15 @@
     "contract:test": "cd contracts && cargo test",
     "contract:deploy": "tsx scripts/deploy-contracts.ts",
     "seed": "tsx scripts/seed.ts",
-    "e2e": "tsx scripts/e2e.ts"
+    "e2e": "tsx scripts/e2e.ts",
+    "admin": "tsx scripts/admin.ts",
+    "upgrade": "tsx scripts/upgrade.ts",
+    "setup-env": "tsx scripts/setup-env.ts",
+    "dep-graph": "tsx scripts/dep-graph.ts",
+    "backup-state": "tsx scripts/backup-state.ts",
+    "verify-upgrade": "tsx scripts/verify-upgrade.ts",
+    "rollback-upgrade": "tsx scripts/rollback-upgrade.ts",
+    "list-wasm-hashes": "tsx scripts/list-wasm-hashes.ts"
   },
   "devDependencies": {
     "tsx": "^4.19.0",
@@ -24,5 +32,8 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "commander": "^15.0.0"
   }
 }
