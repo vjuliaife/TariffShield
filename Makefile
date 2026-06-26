@@ -14,7 +14,7 @@ help:
 dev:
 	npm run setup-env
 	docker compose up -d postgres
-	npm run dev:api & npm run dev:web
+	npm run dev
 
 test:
 	npm run build
