@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
-import { pool } from "../db.js";
+import { pool, recordAuthenticationAttempt, getFailedAuthAttempts, recordSecurityIncident } from "../db.js";
 import { hashPassword, verifyPassword, signToken, authMiddleware, type AuthedRequest } from "../auth.js";
 
 export const authRouter = Router();
@@ -47,18 +47,41 @@ authRouter.post("/login", async (req: Request, res: Response) => {
     res.status(400).json({ error: "invalid input" });
     return;
   }
-  const r = await pool.query("SELECT id, email, password_hash, role FROM users WHERE email = $1", [
-    parse.data.email,
+
+  const email = parse.data.email;
+  const ipAddress = req.ip ?? "unknown";
+  const userAgent = req.get("user-agent") ?? "unknown";
+
+  const failedAttempts = await getFailedAuthAttempts(email, 30);
+  if (failedAttempts >= 10) {
+    await recordSecurityIncident("P1", `Brute-force attack detected on account ${email}`, email);
+    res.status(429).json({ error: "too many failed attempts, account locked for 30 minutes" });
+    await recordAuthenticationAttempt(email, false, undefined, ipAddress, userAgent);
+    return;
+  }
+
+  const r = await pool.query("SELECT id, email, password_hash, role, locked_until FROM users WHERE email = $1", [
+    email,
   ]);
   if (r.rowCount === 0) {
+    await recordAuthenticationAttempt(email, false, undefined, ipAddress, userAgent);
     res.status(401).json({ error: "invalid credentials" });
     return;
   }
+
   const u = r.rows[0]!;
+  if (u.locked_until && new Date(u.locked_until) > new Date()) {
+    res.status(403).json({ error: "account temporarily locked, try again later" });
+    return;
+  }
+
   if (!(await verifyPassword(parse.data.password, u.password_hash))) {
+    await recordAuthenticationAttempt(email, false, u.id, ipAddress, userAgent);
     res.status(401).json({ error: "invalid credentials" });
     return;
   }
+
+  await recordAuthenticationAttempt(email, true, u.id, ipAddress, userAgent);
   res.json({
     token: signToken({ id: u.id, email: u.email, role: u.role }),
     user: { id: u.id, email: u.email, role: u.role },

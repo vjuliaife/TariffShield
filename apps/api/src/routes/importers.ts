@@ -6,6 +6,7 @@ import { authMiddleware, type AuthedRequest } from "../auth.js";
 import { contractClient, explorerTx, platformKeypair, suretyKeypair } from "../stellar.js";
 import { lookupCbpDutyRate } from "../services/cbp-duty-lookup.js";
 import { screenImporterEntity, screenWalletAddress } from "../services/aml-screening.js";
+import { validateBondForm301 } from "../services/cbp-bond-validation.js";
 import { env } from "../config/env.js";
 
 export const importersRouter = Router();
@@ -52,6 +53,21 @@ importersRouter.post("/", async (req: Request, res: Response) => {
     return;
   }
 
+  const bondValidation = validateBondForm301({
+    principalLegalName: legalName,
+    principalEin: ein,
+    bondTypeCode: "02",
+    bondAmount: BigInt(initialRequiredCollateral),
+  });
+
+  if (!bondValidation.valid) {
+    res.status(422).json({
+      error: "Bond validation failed",
+      details: bondValidation.errors,
+    });
+    return;
+  }
+
   const inserted = await pool.query(
     `INSERT INTO importers (user_id, legal_name, ein, bond_id, stellar_address, stellar_secret_encrypted)
      VALUES ($1, $2, $3, $4, $5, $6)
@@ -59,6 +75,13 @@ importersRouter.post("/", async (req: Request, res: Response) => {
     [user.id, legalName, ein ?? null, bondId, kp.publicKey(), kp.secret()],
   );
   const importer = inserted.rows[0]!;
+
+  await pool.query(
+    `INSERT INTO bond_records (importer_id, bond_id, bond_type_code, principal_legal_name, principal_ein,
+                               surety_company_name, surety_fein, bond_amount, cbp_minimum_required, effective_date, template_version, cbp_regulation_revision_date)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+    [importer.id, bondId, "02", legalName, ein ?? null, "TBD", "TBD", initialRequiredCollateral, bondValidation.minimumRequired.toString(), new Date(), "1.0", new Date()],
+  );
 
   // Fund the importer account via friendbot (testnet only)
   try {

@@ -324,8 +324,18 @@ impl TariffShieldContract {
         get_token(&env)
     }
 
+    pub fn migrate_account(env: Env, admin: Address, importer: Address, new_account: Account) {
+        require_admin(&env, &admin);
+        admin.require_auth();
+        save_account(&env, &importer, &new_account);
+        env.events().publish(
+            (symbol_short!("migrat"), importer.clone()),
+            new_account.bond_id,
+        );
+    }
+
     pub fn version() -> Symbol {
-        symbol_short!("v0_1_0")
+        symbol_short!("v0_2_0")
     }
 }
 

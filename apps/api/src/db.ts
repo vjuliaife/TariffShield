@@ -100,6 +100,7 @@ export async function migrate(): Promise<void> {
       email TEXT UNIQUE NOT NULL,
       password_hash TEXT NOT NULL,
       role TEXT NOT NULL DEFAULT 'importer' CHECK (role IN ('importer', 'surety_admin')),
+      locked_until TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
@@ -163,6 +164,76 @@ export async function migrate(): Promise<void> {
       last_processed_ledger INTEGER NOT NULL,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+
+    CREATE TABLE IF NOT EXISTS security_incidents (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      incident_id TEXT UNIQUE NOT NULL,
+      severity TEXT NOT NULL CHECK (severity IN ('P0', 'P1', 'P2', 'P3')),
+      detected_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      description TEXT NOT NULL,
+      affected_scope TEXT,
+      status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'investigating', 'contained', 'resolved')),
+      resolution_timeline TIMESTAMPTZ,
+      notification_sent_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_security_incidents_severity ON security_incidents(severity, detected_at DESC);
+
+    CREATE TABLE IF NOT EXISTS data_erasure_requests (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      request_id TEXT UNIQUE NOT NULL,
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      importer_id UUID REFERENCES importers(id) ON DELETE SET NULL,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
+      requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      processing_started_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      sla_deadline TIMESTAMPTZ NOT NULL,
+      affected_fields TEXT ARRAY,
+      error_message TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_data_erasure_requests_status ON data_erasure_requests(status, sla_deadline);
+    CREATE INDEX IF NOT EXISTS idx_data_erasure_requests_user ON data_erasure_requests(user_id, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS bond_records (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      importer_id UUID NOT NULL REFERENCES importers(id) ON DELETE CASCADE,
+      bond_id BIGINT NOT NULL,
+      bond_type_code TEXT NOT NULL CHECK (bond_type_code IN ('01', '02', '03', '04')),
+      principal_legal_name TEXT NOT NULL,
+      principal_ein TEXT NOT NULL,
+      surety_company_name TEXT NOT NULL,
+      surety_fein TEXT NOT NULL,
+      bond_amount NUMERIC(20, 0) NOT NULL,
+      cbp_minimum_required NUMERIC(20, 0) NOT NULL,
+      effective_date DATE NOT NULL,
+      expiry_date DATE,
+      template_version TEXT,
+      cbp_regulation_revision_date DATE,
+      requires_increase BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_bond_records_importer ON bond_records(importer_id);
+    CREATE INDEX IF NOT EXISTS idx_bond_records_requires_increase ON bond_records(requires_increase, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS authentication_attempts (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+      email TEXT NOT NULL,
+      success BOOLEAN NOT NULL,
+      ip_address TEXT,
+      user_agent TEXT,
+      attempted_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_authentication_attempts_email_time ON authentication_attempts(email, attempted_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_authentication_attempts_user_id ON authentication_attempts(user_id, attempted_at DESC);
   `,
     undefined,
     "migrate_schema",
@@ -212,4 +283,70 @@ export async function getActiveBonds(): Promise<{ bondId: string; dbBalance: str
     bondId: row.bond_id,
     dbBalance: row.collateral_balance,
   }));
+}
+
+export async function recordAuthenticationAttempt(
+  email: string,
+  success: boolean,
+  userId?: string,
+  ipAddress?: string,
+  userAgent?: string,
+): Promise<void> {
+  await timedQuery(
+    `INSERT INTO authentication_attempts (email, success, user_id, ip_address, user_agent)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [email, success, userId ?? null, ipAddress ?? null, userAgent ?? null],
+    "insert_auth_attempt",
+  );
+}
+
+export async function getFailedAuthAttempts(email: string, withinMinutes: number = 30): Promise<number> {
+  const result = await timedQuery<{ count: string }>(
+    `SELECT COUNT(*) as count FROM authentication_attempts
+     WHERE email = $1 AND success = FALSE
+     AND attempted_at > now() - INTERVAL '${withinMinutes} minutes'`,
+    [email],
+    "count_failed_auth_attempts",
+  );
+  return parseInt(result.rows[0]?.count ?? "0", 10);
+}
+
+export async function lockAccountTemporarily(userId: string, durationMinutes: number = 30): Promise<void> {
+  await timedQuery(
+    `UPDATE users SET locked_until = now() + INTERVAL '${durationMinutes} minutes'
+     WHERE id = $1`,
+    [userId],
+    "lock_account",
+  );
+}
+
+export async function recordSecurityIncident(
+  severity: "P0" | "P1" | "P2" | "P3",
+  description: string,
+  affectedScope?: string,
+): Promise<string> {
+  const incidentId = `INC-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  const result = await timedQuery<{ id: string }>(
+    `INSERT INTO security_incidents (incident_id, severity, description, affected_scope)
+     VALUES ($1, $2, $3, $4) RETURNING id`,
+    [incidentId, severity, description, affectedScope ?? null],
+    "insert_security_incident",
+  );
+  return result.rows[0]?.id ?? "";
+}
+
+export async function createDataErasureRequest(
+  userId: string,
+  importerId?: string,
+): Promise<string> {
+  const requestId = `ERASE-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  const slaDealine = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+  const result = await timedQuery<{ id: string }>(
+    `INSERT INTO data_erasure_requests (request_id, user_id, importer_id, sla_deadline, affected_fields)
+     VALUES ($1, $2, $3, $4, ARRAY['legal_name', 'ein', 'email'])
+     RETURNING id`,
+    [requestId, userId, importerId ?? null, slaDealine],
+    "insert_erasure_request",
+  );
+  return result.rows[0]?.id ?? "";
 }
