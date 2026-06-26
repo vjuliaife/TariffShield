@@ -19,6 +19,9 @@ export const Env = z.object({
   ADMIN_3_SECRET: z.string().startsWith("S").min(56).optional().describe("Admin 3 Stellar secret key for multi-sig upgrade"),
   SURETY_STELLAR_SECRET: z.string().startsWith("S").min(56).describe("Surety provider Stellar secret key"),
   METRICS_ALLOWED_CIDR: z.string().optional().describe("CIDR block allowed to access Prometheus metrics"),
+  CBP_VALIDATION_MODE: z.enum(["warn", "block"]).default("block").describe("CBP lookup failure mode"),
+  ORACLE_ALERT_THRESHOLD_PCT: z.coerce.number().default(50).describe("Alert threshold for collateral change"),
+  ALERT_CHANNEL: z.string().default("console").describe("Alert channel for oracle monitor"),
 });
 
 const parsed = Env.safeParse(process.env);
@@ -29,7 +32,7 @@ if (!parsed.success) {
     const varName = issue.path[0];
     const shape = Env.shape[varName as keyof typeof Env.shape];
     const description = shape?.description || "No description provided";
-    console.error(`  - ${varName}: ${issue.message} - ${description}`);
+    console.error(`  - ${String(varName)}: ${issue.message} - ${description}`);
   }
   process.exit(1);
 }

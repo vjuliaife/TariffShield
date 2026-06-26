@@ -24,7 +24,7 @@ authRouter.post("/signup", async (req: Request, res: Response) => {
       "INSERT INTO users (email, password_hash, role) VALUES ($1, $2, $3) RETURNING id, email, role",
       [email, hash, role],
     );
-    const u = result.rows[0];
+    const u = result.rows[0]!;
     res.json({ token: signToken({ id: u.id, email: u.email, role: u.role }), user: u });
   } catch (err) {
     const e = err as { code?: string };
@@ -54,7 +54,7 @@ authRouter.post("/login", async (req: Request, res: Response) => {
     res.status(401).json({ error: "invalid credentials" });
     return;
   }
-  const u = r.rows[0];
+  const u = r.rows[0]!;
   if (!(await verifyPassword(parse.data.password, u.password_hash))) {
     res.status(401).json({ error: "invalid credentials" });
     return;

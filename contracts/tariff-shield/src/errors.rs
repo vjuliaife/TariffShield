@@ -15,4 +15,5 @@ pub enum Error {
     ProposalNotFound = 9,
     ProposalExpired = 10,
     AlreadyVoted = 11,
+    StaleOracleError = 12,
 }

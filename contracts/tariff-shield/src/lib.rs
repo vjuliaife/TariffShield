@@ -49,6 +49,7 @@ pub struct Account {
     pub reserve_balance: i128,
     pub yield_accrued: i128,
     pub is_clawbacked: bool,
+    pub collateral_last_updated: u64,
 }
 
 #[contractimpl]
@@ -83,6 +84,7 @@ impl TariffShieldContract {
             reserve_balance: 0,
             yield_accrued: 0,
             is_clawbacked: false,
+            collateral_last_updated: env.ledger().timestamp(),
         };
         env.storage().persistent().set(&key, &account);
         env.events().publish(
@@ -98,6 +100,7 @@ impl TariffShieldContract {
         }
         let mut acct = load_account(&env, &importer);
         require_active(&env, &acct);
+        require_fresh_collateral(&env, &importer, &acct);
         let token_addr = get_token(&env);
         token::Client::new(&env, &token_addr).transfer(
             &from,
@@ -119,6 +122,7 @@ impl TariffShieldContract {
         }
         let mut acct = load_account(&env, &importer);
         require_active(&env, &acct);
+        require_fresh_collateral(&env, &importer, &acct);
         let token_addr = get_token(&env);
         token::Client::new(&env, &token_addr).transfer(
             &from,
@@ -142,6 +146,7 @@ impl TariffShieldContract {
         let mut acct = load_account(&env, &importer);
         let old_required = acct.required_collateral;
         acct.required_collateral = new_required;
+        acct.collateral_last_updated = env.ledger().timestamp();
         save_account(&env, &importer, &acct);
         env.events().publish(
             (symbol_short!("required"), importer.clone()),
@@ -178,6 +183,7 @@ impl TariffShieldContract {
         }
         let mut acct = load_account(&env, &importer);
         require_active(&env, &acct);
+        require_fresh_collateral(&env, &importer, &acct);
         let excess = acct.collateral_balance - acct.required_collateral;
         if amount > excess {
             panic_with_error!(&env, Error::CollateralBelowRequired);
@@ -303,6 +309,11 @@ impl TariffShieldContract {
         load_account(&env, &importer)
     }
 
+    pub fn is_collateral_stale(env: Env, account_id: Address) -> bool {
+        let acct = load_account(&env, &account_id);
+        is_stale(&env, &acct)
+    }
+
     pub fn get_admin(env: Env) -> Address {
         get_admin(&env)
     }
@@ -368,3 +379,16 @@ fn require_active(env: &Env, acct: &Account) {
         panic_with_error!(env, Error::AccountFrozen);
     }
 }
+
+fn is_stale(env: &Env, acct: &Account) -> bool {
+    env.ledger().timestamp() > acct.collateral_last_updated + 365 * 86400
+}
+
+fn require_fresh_collateral(env: &Env, importer: &Address, acct: &Account) {
+    if is_stale(env, acct) {
+        let expiry = acct.collateral_last_updated + 365 * 86400;
+        env.events().publish((symbol_short!("stale"), importer.clone()), expiry);
+        panic_with_error!(env, Error::StaleOracleError);
+    }
+}
+

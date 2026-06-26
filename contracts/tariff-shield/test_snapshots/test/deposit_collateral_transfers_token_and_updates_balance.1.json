@@ -620,6 +620,14 @@
                     },
                     {
                       "key": {
+                        "symbol": "collateral_last_updated"
+                      },
+                      "val": {
+                        "u64": 0
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "is_clawbacked"
                       },
                       "val": {

@@ -44,7 +44,7 @@ function sanitizeSql(sql: string): string {
 function inferQueryName(sql: string): string {
   const s = sql.trim().toUpperCase();
   const m = s.match(/^(SELECT|INSERT|UPDATE|DELETE|CREATE|DROP|ALTER)\s+(?:INTO\s+|FROM\s+|TABLE\s+)?(\w+)?/);
-  return m ? `${m[1].toLowerCase()}${m[2] ? `_${m[2].toLowerCase()}` : ""}` : "unknown";
+  return m ? `${m[1]!.toLowerCase()}${m[2] ? `_${m[2]!.toLowerCase()}` : ""}` : "unknown";
 }
 
 async function timedQuery<R extends QueryResultRow = QueryResultRow>(
@@ -137,6 +137,26 @@ export async function migrate(): Promise<void> {
 
     CREATE INDEX IF NOT EXISTS idx_contract_events_importer ON contract_events(importer_id, created_at DESC);
 
+    CREATE TABLE IF NOT EXISTS oracle_alerts (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      importer_id UUID NOT NULL REFERENCES importers(id) ON DELETE CASCADE,
+      old_value NUMERIC(20, 0) NOT NULL,
+      new_value NUMERIC(20, 0) NOT NULL,
+      pct_change NUMERIC(5, 2) NOT NULL,
+      tx_hash TEXT NOT NULL,
+      alerted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      acknowledged_at TIMESTAMPTZ
+    );
+
+    CREATE TABLE IF NOT EXISTS aml_screenings (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      wallet_address TEXT NOT NULL,
+      screening_timestamp TIMESTAMPTZ NOT NULL DEFAULT now(),
+      risk_score TEXT NOT NULL,
+      provider_response JSONB,
+      resolution_action TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS indexer_state (
       id TEXT PRIMARY KEY,
       last_processed_ledger INTEGER NOT NULL,
@@ -158,7 +178,7 @@ export async function getLastProcessedLedger(): Promise<number | null> {
   if (!result.rowCount || result.rowCount === 0) {
     return null;
   }
-  return result.rows[0].last_processed_ledger;
+  return result.rows[0]!.last_processed_ledger;
 }
 
 export async function updateLastProcessedLedger(ledger: number): Promise<void> {

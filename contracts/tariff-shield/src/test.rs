@@ -2,7 +2,7 @@
 
 use super::*;
 use soroban_sdk::{
-    testutils::{Address as _, MockAuth, MockAuthInvoke},
+    testutils::{Address as _, Ledger, MockAuth, MockAuthInvoke},
     token::{StellarAssetClient, TokenClient},
     Env, IntoVal,
 };
@@ -260,4 +260,37 @@ fn cannot_approve_twice() {
     let proposal_id = s.client.propose_upgrade(&s.admin1, &hash);
     
     s.client.approve_upgrade(&s.admin1, &proposal_id);
+}
+
+#[test]
+fn staleness_checks_work() {
+    let s = setup();
+    s.env.ledger().with_mut(|li| {
+        li.timestamp = 100;
+    });
+    s.client.register_importer(&s.importer, &1, &100_000_0000000);
+    assert_eq!(s.client.is_collateral_stale(&s.importer), false);
+
+    // fast forward 366 days
+    s.env.ledger().with_mut(|li| {
+        li.timestamp = 100 + 366 * 86400;
+    });
+    assert_eq!(s.client.is_collateral_stale(&s.importer), true);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #12)")] // StaleOracleError
+fn stale_collateral_blocks_deposit() {
+    let s = setup();
+    s.env.ledger().with_mut(|li| {
+        li.timestamp = 100;
+    });
+    s.client.register_importer(&s.importer, &1, &100_000_0000000);
+    
+    // Fast forward 366 days
+    s.env.ledger().with_mut(|li| {
+        li.timestamp = 100 + 366 * 86400;
+    });
+    
+    s.client.deposit_collateral(&s.importer, &s.funder, &1_0000000);
 }

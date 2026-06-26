@@ -10,7 +10,9 @@ import { env, isProduction } from "./config/env.js";
 import { migrate } from "./db.js";
 import { authRouter } from "./routes/auth.js";
 import { importersRouter } from "./routes/importers.js";
+import { adminRouter } from "./routes/admin.js";
 import { startIndexer } from "./indexer.js";
+import { startOracleMonitor } from "./services/oracle-monitor.js";
 
 const app = express();
 
@@ -256,6 +258,7 @@ app.use("/auth/signup", authLimiter);
 app.use("/auth/login", authLimiter);
 app.use("/auth", authRouter);
 app.use("/importers", importersRouter);
+app.use("/admin", adminRouter);
 
 Sentry.setupExpressErrorHandler(app);
 
@@ -267,6 +270,7 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
 async function start() {
   await migrate();
   await startIndexer();
+  await startOracleMonitor();
   app.listen(env.PORT, () => {
     console.log(`[boot] tariffshield API on :${env.PORT}`);
     console.log(`[boot] contract: ${env.TARIFF_SHIELD_CONTRACT_ID}`);

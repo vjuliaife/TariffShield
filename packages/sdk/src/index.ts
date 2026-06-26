@@ -17,6 +17,7 @@ export interface TariffShieldAccount {
   reserveBalance: bigint;
   yieldAccrued: bigint;
   isClawbacked: boolean;
+  collateralLastUpdated: bigint;
 }
 
 export interface InvokeResult<T> {
@@ -156,6 +157,7 @@ export class TariffShieldClient {
       reserveBalance: BigInt(obj.reserve_balance as string),
       yieldAccrued: BigInt(obj.yield_accrued as string),
       isClawbacked: Boolean(obj.is_clawbacked),
+      collateralLastUpdated: BigInt(obj.collateral_last_updated as string | number),
     };
   }
 
