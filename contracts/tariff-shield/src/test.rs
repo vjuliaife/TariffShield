@@ -50,7 +50,7 @@ fn setup<'a>() -> Setup<'a> {
     admins.push_back(admin2.clone());
     admins.push_back(admin3.clone());
 
-    client.initialize(&admins, &surety, &token_addr);
+    client.initialize(&admins, &surety, &token_addr, &admins);
 
     Setup {
         env,
@@ -82,7 +82,11 @@ fn cannot_initialize_twice() {
     let s = setup();
     let mut admins = soroban_sdk::Vec::new(&s.env);
     admins.push_back(s.admin1.clone());
-    s.client.initialize(&admins, &s.surety, &s.token_addr);
+    let mut oracle_signers = soroban_sdk::Vec::new(&s.env);
+    oracle_signers.push_back(s.admin1.clone());
+    oracle_signers.push_back(s.admin2.clone());
+    oracle_signers.push_back(s.admin3.clone());
+    s.client.initialize(&admins, &s.surety, &s.token_addr, &oracle_signers);
 }
 
 #[test]
@@ -165,7 +169,11 @@ fn auto_top_up_uses_partial_reserve_when_reserve_insufficient() {
 fn set_required_collateral_updates_target() {
     let s = setup();
     s.client.register_importer(&s.importer, &1, &100_000_0000000);
-    s.client.set_required_collateral(&s.importer, &175_000_0000000);
+    // 75% change requires 2-of-3 signers
+    let mut signers = soroban_sdk::Vec::new(&s.env);
+    signers.push_back(s.admin1.clone());
+    signers.push_back(s.admin2.clone());
+    s.client.set_required_collateral(&s.importer, &175_000_0000000, &signers);
     assert_eq!(s.client.get_account(&s.importer).required_collateral, 175_000_0000000);
 }
 
@@ -293,4 +301,70 @@ fn stale_collateral_blocks_deposit() {
     });
     
     s.client.deposit_collateral(&s.importer, &s.funder, &1_0000000);
+}
+
+// ── Issue #328: 2-of-3 oracle multisig tests ─────────────────────────────────
+
+#[test]
+fn small_update_requires_only_1_signer() {
+    let s = setup();
+    s.client.register_importer(&s.importer, &1, &100_000_0000000);
+    // 5% change — below 20% threshold, only 1 signer needed
+    let mut signers = soroban_sdk::Vec::new(&s.env);
+    signers.push_back(s.admin1.clone());
+    s.client.set_required_collateral(&s.importer, &105_000_0000000, &signers);
+    assert_eq!(s.client.get_account(&s.importer).required_collateral, 105_000_0000000);
+}
+
+#[test]
+fn large_update_requires_2_signers() {
+    let s = setup();
+    s.client.register_importer(&s.importer, &1, &100_000_0000000);
+    // 50% change — requires 2-of-3
+    let mut signers = soroban_sdk::Vec::new(&s.env);
+    signers.push_back(s.admin1.clone());
+    signers.push_back(s.admin2.clone());
+    s.client.set_required_collateral(&s.importer, &150_000_0000000, &signers);
+    assert_eq!(s.client.get_account(&s.importer).required_collateral, 150_000_0000000);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #14)")] // InsufficientSignatures
+fn large_update_with_only_1_signer_is_rejected() {
+    let s = setup();
+    s.client.register_importer(&s.importer, &1, &100_000_0000000);
+    let mut signers = soroban_sdk::Vec::new(&s.env);
+    signers.push_back(s.admin1.clone());
+    // 50% change but only 1 signer — should panic
+    s.client.set_required_collateral(&s.importer, &150_000_0000000, &signers);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #13)")] // InvalidSignatureSet
+fn duplicate_signer_is_rejected() {
+    let s = setup();
+    s.client.register_importer(&s.importer, &1, &100_000_0000000);
+    let mut signers = soroban_sdk::Vec::new(&s.env);
+    signers.push_back(s.admin1.clone());
+    signers.push_back(s.admin1.clone()); // duplicate
+    s.client.set_required_collateral(&s.importer, &150_000_0000000, &signers);
+}
+
+#[test]
+fn update_oracle_signers_requires_2_of_3_approval() {
+    let s = setup();
+    let new_signer = Address::generate(&s.env);
+    let mut new_signers = soroban_sdk::Vec::new(&s.env);
+    new_signers.push_back(s.admin1.clone());
+    new_signers.push_back(s.admin2.clone());
+    new_signers.push_back(new_signer.clone());
+
+    let mut approvals = soroban_sdk::Vec::new(&s.env);
+    approvals.push_back(s.admin1.clone());
+    approvals.push_back(s.admin2.clone());
+
+    s.client.update_oracle_signers(&new_signers, &approvals);
+
+    let updated = s.client.get_oracle_signers();
+    assert_eq!(updated.get(2).unwrap(), new_signer);
 }

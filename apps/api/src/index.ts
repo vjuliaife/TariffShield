@@ -14,6 +14,7 @@ import { adminRouter } from "./routes/admin.js";
 import { startIndexer } from "./indexer.js";
 import { startReconciliationJob } from "./jobs/reconcile-balances.js";
 import { startOracleMonitor } from "./services/oracle-monitor.js";
+import { startRetentionJob } from "./jobs/retention-enforcement.js";
 
 const app = express();
 
@@ -273,6 +274,7 @@ async function start() {
   await startIndexer();
   startReconciliationJob();
   await startOracleMonitor();
+  startRetentionJob();
   app.listen(env.PORT, () => {
     console.log(`[boot] tariffshield API on :${env.PORT}`);
     console.log(`[boot] contract: ${env.TARIFF_SHIELD_CONTRACT_ID}`);

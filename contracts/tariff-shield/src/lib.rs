@@ -30,6 +30,8 @@ pub enum DataKey {
     Account(Address),
     Proposal(u64),
     ProposalCounter,
+    OracleSigners,
+    OracleThreshold,
 }
 
 #[contracttype]
@@ -54,17 +56,22 @@ pub struct Account {
 
 #[contractimpl]
 impl TariffShieldContract {
-    pub fn initialize(env: Env, admins: Vec<Address>, surety: Address, token: Address) {
+    pub fn initialize(env: Env, admins: Vec<Address>, surety: Address, token: Address, oracle_signers: Vec<Address>) {
         if env.storage().instance().has(&DataKey::Admins) {
             panic_with_error!(&env, Error::AlreadyInitialized);
         }
         for admin in admins.iter() {
             admin.require_auth();
         }
+        if oracle_signers.len() != 3 {
+            panic_with_error!(&env, Error::InvalidSignatureSet);
+        }
         env.storage().instance().set(&DataKey::Admins, &admins);
         env.storage().instance().set(&DataKey::Surety, &surety);
         env.storage().instance().set(&DataKey::Token, &token);
         env.storage().instance().set(&DataKey::ProposalCounter, &0u64);
+        env.storage().instance().set(&DataKey::OracleSigners, &oracle_signers);
+        env.storage().instance().set(&DataKey::OracleThreshold, &2u32);
     }
 
     pub fn register_importer(env: Env, importer: Address, bond_id: u64, required_collateral: i128) {
@@ -137,14 +144,52 @@ impl TariffShieldContract {
         );
     }
 
-    pub fn set_required_collateral(env: Env, importer: Address, new_required: i128) {
-        let admin = get_admin(&env);
-        admin.require_auth();
+    pub fn set_required_collateral(env: Env, importer: Address, new_required: i128, signers: Vec<Address>) {
         if new_required < 0 {
             panic_with_error!(&env, Error::InvalidAmount);
         }
         let mut acct = load_account(&env, &importer);
         let old_required = acct.required_collateral;
+
+        // Determine how many valid signer approvals are needed
+        let pct_change = if old_required == 0 {
+            100u32
+        } else {
+            let diff = if new_required > old_required { new_required - old_required } else { old_required - new_required };
+            ((diff * 100) / old_required) as u32
+        };
+        let threshold: u32 = if pct_change >= 20 {
+            env.storage().instance().get(&DataKey::OracleThreshold).unwrap_or(2u32)
+        } else {
+            1u32
+        };
+
+        // Validate signers: must be from oracle_signers list, no duplicates, meet threshold
+        let oracle_signers: Vec<Address> = env.storage().instance()
+            .get(&DataKey::OracleSigners)
+            .unwrap_or_else(|| panic_with_error!(&env, Error::NotInitialized));
+
+        if signers.len() < threshold {
+            panic_with_error!(&env, Error::InsufficientSignatures);
+        }
+
+        let mut seen = Vec::new(&env);
+        let mut valid_count: u32 = 0;
+        for signer in signers.iter() {
+            if seen.contains(signer.clone()) {
+                panic_with_error!(&env, Error::InvalidSignatureSet);
+            }
+            seen.push_back(signer.clone());
+            if oracle_signers.contains(signer.clone()) {
+                signer.require_auth();
+                valid_count += 1;
+            }
+        }
+
+        if valid_count < threshold {
+            panic_with_error!(&env, Error::InsufficientSignatures);
+        }
+
         acct.required_collateral = new_required;
         acct.collateral_last_updated = env.ledger().timestamp();
         save_account(&env, &importer, &acct);
@@ -152,6 +197,40 @@ impl TariffShieldContract {
             (symbol_short!("required"), importer.clone()),
             (old_required, new_required),
         );
+    }
+
+    /// Rotate the oracle signer set — requires 2-of-3 from the current signer set.
+    pub fn update_oracle_signers(env: Env, new_signers: Vec<Address>, approvals: Vec<Address>) {
+        if new_signers.len() != 3 {
+            panic_with_error!(&env, Error::InvalidSignatureSet);
+        }
+        let oracle_signers: Vec<Address> = env.storage().instance()
+            .get(&DataKey::OracleSigners)
+            .unwrap_or_else(|| panic_with_error!(&env, Error::NotInitialized));
+        let threshold: u32 = env.storage().instance().get(&DataKey::OracleThreshold).unwrap_or(2u32);
+
+        let mut seen = Vec::new(&env);
+        let mut valid_count: u32 = 0;
+        for signer in approvals.iter() {
+            if seen.contains(signer.clone()) {
+                panic_with_error!(&env, Error::InvalidSignatureSet);
+            }
+            seen.push_back(signer.clone());
+            if oracle_signers.contains(signer.clone()) {
+                signer.require_auth();
+                valid_count += 1;
+            }
+        }
+        if valid_count < threshold {
+            panic_with_error!(&env, Error::InsufficientSignatures);
+        }
+        env.storage().instance().set(&DataKey::OracleSigners, &new_signers);
+    }
+
+    pub fn get_oracle_signers(env: Env) -> Vec<Address> {
+        env.storage().instance()
+            .get(&DataKey::OracleSigners)
+            .unwrap_or_else(|| panic_with_error!(&env, Error::NotInitialized))
     }
 
     pub fn auto_top_up(env: Env, importer: Address) -> i128 {

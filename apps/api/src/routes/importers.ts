@@ -1,9 +1,10 @@
 import { Router, type Request, type Response } from "express";
+import { createHash } from "crypto";
 import { Keypair } from "@stellar/stellar-sdk";
 import { z } from "zod";
 import { pool } from "../db.js";
 import { authMiddleware, type AuthedRequest } from "../auth.js";
-import { contractClient, explorerTx, platformKeypair, suretyKeypair } from "../stellar.js";
+import { contractClient, explorerTx, platformKeypair, suretyKeypair, getOracleSignerKeypairs, getRequiredCollateralOnChain } from "../stellar.js";
 import { lookupCbpDutyRate } from "../services/cbp-duty-lookup.js";
 import { screenImporterEntity, screenWalletAddress } from "../services/aml-screening.js";
 import { env } from "../config/env.js";
@@ -250,8 +251,17 @@ importersRouter.post("/:id/upload-tariff-csv", async (req: Request, res: Respons
   // Token is XLM in the demo (1 USD ≈ 1 XLM for stand-in); 7 decimals.
   const requiredStroops = BigInt(Math.round(requiredCollateralUSD * 1e7));
 
+  // Determine required signer count based on change magnitude (>=20% requires 2-of-3)
+  const currentAcct = await contractClient.getAccount(importer.stellar_address).catch(() => null);
+  const currentRequired = currentAcct ? Number(currentAcct.requiredCollateral) : 0;
+  const pctChange = currentRequired > 0
+    ? Math.abs(Number(requiredStroops) - currentRequired) / currentRequired
+    : 1;
+  const signerCount = pctChange >= 0.20 ? 2 : 1;
+  const signers = getOracleSignerKeypairs(signerCount);
+
   const onChain = await contractClient.setRequiredCollateral(
-    platformKeypair,
+    signers,
     importer.stellar_address,
     requiredStroops,
   );
@@ -418,5 +428,92 @@ importersRouter.post("/:id/clawback", async (req: Request, res: Response) => {
     clawedStroops: onChain.result.toString(),
     txHash: onChain.txHash,
     txUrl: explorerTx(onChain.txHash),
+  });
+});
+
+// ── Issue #335: Oracle data reconciliation endpoint ───────────────────────────
+
+const VerifyOracleSchema = z.object({
+  as_of_date: z.string().datetime().optional(),
+});
+
+importersRouter.post("/:id/verify-oracle-data", async (req: Request, res: Response) => {
+  const user = (req as AuthedRequest).user;
+  const importerId = String(req.params.id ?? "");
+
+  // Accessible by: the importer themselves, surety_admin, or platform admin (surety_admin covers both)
+  let importer: Record<string, unknown> | null = null;
+  if (user.role === "surety_admin") {
+    const r = await pool.query("SELECT * FROM importers WHERE id = $1", [importerId]);
+    importer = r.rows[0] ?? null;
+  } else {
+    const r = await pool.query("SELECT * FROM importers WHERE id = $1 AND user_id = $2", [importerId, user.id]);
+    importer = r.rows[0] ?? null;
+  }
+  if (!importer) {
+    res.status(404).json({ error: "not found" });
+    return;
+  }
+
+  const parse = VerifyOracleSchema.safeParse(req.body);
+  if (!parse.success) {
+    res.status(400).json({ error: "invalid input", details: parse.error.issues });
+    return;
+  }
+
+  // Fetch latest tariff upload for this importer
+  const uploadQ = parse.data.as_of_date
+    ? await pool.query(
+        "SELECT * FROM tariff_uploads WHERE importer_id = $1 AND created_at <= $2 ORDER BY created_at DESC LIMIT 1",
+        [importerId, parse.data.as_of_date],
+      )
+    : await pool.query(
+        "SELECT * FROM tariff_uploads WHERE importer_id = $1 ORDER BY created_at DESC LIMIT 1",
+        [importerId],
+      );
+
+  if (!uploadQ.rowCount || uploadQ.rowCount === 0) {
+    res.status(404).json({ error: "no tariff CSV data found for this importer" });
+    return;
+  }
+  const upload = uploadQ.rows[0]!;
+
+  // Re-derive: required = annual_duty * 10% * 50%
+  const annualDuty = Number(upload.annual_duty_total);
+  const computed = BigInt(Math.round(annualDuty * 0.1 * 0.5 * 1e7));
+
+  // CSV hash — hash the stored annual_duty_total + filename as a stable fingerprint
+  const csvFingerprint = `${upload.filename ?? ""}:${upload.annual_duty_total}`;
+  const csvHash = createHash("sha256").update(csvFingerprint).digest("hex");
+
+  // Fetch on-chain value
+  const onChainStr = await getRequiredCollateralOnChain(importer.stellar_address as string);
+  const onChain = BigInt(onChainStr);
+
+  const computedNum = Number(computed);
+  const onChainNum = Number(onChain);
+  const deviationPct = onChainNum === 0
+    ? (computedNum === 0 ? 0 : 100)
+    : Math.abs(computedNum - onChainNum) / onChainNum * 100;
+
+  const match = deviationPct <= 1.0;
+
+  // Write reconciliation_failure alert if material mismatch
+  if (!match && deviationPct > 1.0) {
+    await pool.query(
+      `INSERT INTO oracle_alerts (importer_id, old_value, new_value, pct_change, tx_hash)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT DO NOTHING`,
+      [importerId, onChainStr, computed.toString(), deviationPct.toFixed(2), "reconciliation_failure"],
+    );
+  }
+
+  res.json({
+    computed: computed.toString(),
+    on_chain: onChainStr,
+    match,
+    deviation_pct: Math.round(deviationPct * 100) / 100,
+    csv_hash: csvHash,
+    collateral_timestamp: (upload.created_at as Date).toISOString(),
   });
 });

@@ -16,4 +16,6 @@ pub enum Error {
     ProposalExpired = 10,
     AlreadyVoted = 11,
     StaleOracleError = 12,
+    InvalidSignatureSet = 13,
+    InsufficientSignatures = 14,
 }

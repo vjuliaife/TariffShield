@@ -163,6 +163,52 @@ export async function migrate(): Promise<void> {
       last_processed_ledger INTEGER NOT NULL,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+
+    -- Issue #313: data retention columns and retention_holds table
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS retention_expires_at TIMESTAMPTZ
+      GENERATED ALWAYS AS (closed_at + INTERVAL '3 years') STORED;
+
+    ALTER TABLE importers ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+    ALTER TABLE importers ADD COLUMN IF NOT EXISTS retention_expires_at TIMESTAMPTZ;
+
+    ALTER TABLE tariff_uploads ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+    ALTER TABLE tariff_uploads ADD COLUMN IF NOT EXISTS retention_expires_at TIMESTAMPTZ
+      GENERATED ALWAYS AS (created_at + INTERVAL '7 years') STORED;
+
+    ALTER TABLE contract_events ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+    ALTER TABLE contract_events ADD COLUMN IF NOT EXISTS retention_expires_at TIMESTAMPTZ
+      GENERATED ALWAYS AS (created_at + INTERVAL '7 years') STORED;
+
+    ALTER TABLE aml_screenings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+    ALTER TABLE aml_screenings ADD COLUMN IF NOT EXISTS retention_expires_at TIMESTAMPTZ
+      GENERATED ALWAYS AS (screening_timestamp + INTERVAL '5 years') STORED;
+
+    ALTER TABLE oracle_alerts ADD COLUMN IF NOT EXISTS retention_expires_at TIMESTAMPTZ
+      GENERATED ALWAYS AS (alerted_at + INTERVAL '7 years') STORED;
+
+    CREATE TABLE IF NOT EXISTS retention_holds (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      record_table TEXT NOT NULL,
+      record_id UUID NOT NULL,
+      reason TEXT NOT NULL,
+      held_by TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      released_at TIMESTAMPTZ
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_retention_holds_active
+      ON retention_holds(record_table, record_id)
+      WHERE released_at IS NULL;
+
+    CREATE TABLE IF NOT EXISTS retention_audit_log (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      job_run_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      record_category TEXT NOT NULL,
+      record_count INTEGER NOT NULL,
+      action TEXT NOT NULL,
+      retention_policy TEXT NOT NULL
+    );
   `,
     undefined,
     "migrate_schema",
@@ -204,12 +250,13 @@ export async function ping(): Promise<void> {
 /**
  * Returns all bonds that have been registered on-chain.
  */
-export async function getActiveBonds(): Promise<{ bondId: string; dbBalance: string }[]> {
+export async function getActiveBonds(): Promise<{ bondId: string; dbBalance: string; stellarAddress: string }[]> {
   const result = await pool.query(
-    "SELECT bond_id, collateral_balance FROM importers WHERE registered_on_chain_tx IS NOT NULL"
+    "SELECT bond_id, collateral_balance, stellar_address FROM importers WHERE registered_on_chain_tx IS NOT NULL"
   );
   return result.rows.map((row) => ({
     bondId: row.bond_id,
     dbBalance: row.collateral_balance,
+    stellarAddress: row.stellar_address,
   }));
 }

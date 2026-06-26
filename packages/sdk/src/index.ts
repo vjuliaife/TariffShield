@@ -107,14 +107,41 @@ export class TariffShieldClient {
   }
 
   async setRequiredCollateral(
-    signer: Keypair,
+    signers: Keypair[],
     importer: string,
     newRequired: bigint,
   ): Promise<InvokeResult<null>> {
-    return this.invokeAndSubmit(signer, "set_required_collateral", [
+    if (signers.length === 0) throw new Error("at least one signer required");
+    // Primary signer builds/submits; all signers sign
+    const primarySigner = signers[0]!;
+    const signersScVal = xdr.ScVal.scvVec(
+      signers.map((kp) => addressToScVal(kp.publicKey()))
+    );
+    return this.invokeAndSubmitMulti(signers, "set_required_collateral", [
       addressToScVal(importer),
       nativeToScVal(newRequired, { type: "i128" }),
-    ]);
+      signersScVal,
+    ], primarySigner);
+  }
+
+  async updateOracleSigners(
+    approvalSigners: Keypair[],
+    newSignerAddresses: string[],
+  ): Promise<InvokeResult<null>> {
+    if (newSignerAddresses.length !== 3) throw new Error("exactly 3 new signers required");
+    const newSignersScVal = xdr.ScVal.scvVec(newSignerAddresses.map(addressToScVal));
+    const approvalsScVal = xdr.ScVal.scvVec(
+      approvalSigners.map((kp) => addressToScVal(kp.publicKey()))
+    );
+    return this.invokeAndSubmitMulti(approvalSigners, "update_oracle_signers", [
+      newSignersScVal,
+      approvalsScVal,
+    ], approvalSigners[0]!);
+  }
+
+  async getOracleSigners(): Promise<string[]> {
+    const raw = await this.simulate("get_oracle_signers", []);
+    return scValToNative(raw) as string[];
   }
 
   async autoTopUp(signer: Keypair, importer: string): Promise<InvokeResult<bigint>> {
@@ -199,6 +226,45 @@ export class TariffShieldClient {
       throw new Error(`simulate ${method} returned no value`);
     }
     return sim.result.retval;
+  }
+
+  private async invokeAndSubmitMulti<T>(
+    signers: Keypair[],
+    method: string,
+    args: xdr.ScVal[],
+    primary: Keypair,
+  ): Promise<InvokeResult<T>> {
+    const account = await this.server.getAccount(primary.publicKey());
+    const tx = new TransactionBuilder(account, {
+      fee: DEFAULT_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(this.contract.call(method, ...args))
+      .setTimeout(this.txTimeoutSeconds)
+      .build();
+
+    const prepared = await this.server.prepareTransaction(tx);
+    for (const signer of signers) {
+      prepared.sign(signer);
+    }
+    const sendResponse = await this.server.sendTransaction(prepared);
+    if (sendResponse.status === "ERROR") {
+      throw new Error(`send failed: ${JSON.stringify(sendResponse.errorResult)}`);
+    }
+    const txHash = sendResponse.hash;
+
+    let txResult = await this.server.getTransaction(txHash);
+    const deadline = Date.now() + 60_000;
+    while (txResult.status === "NOT_FOUND" && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 1500));
+      txResult = await this.server.getTransaction(txHash);
+    }
+    if (txResult.status !== "SUCCESS") {
+      throw new Error(`tx ${txHash} status=${txResult.status}`);
+    }
+    const retval = txResult.returnValue;
+    const parsed = (retval ? scValToNative(retval) : null) as T;
+    return { txHash, result: parsed };
   }
 
   private async invokeAndSubmit<T>(
