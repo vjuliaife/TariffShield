@@ -19,3 +19,7 @@ deployments.json
 .vscode
 .idea
 Cargo.lock
+
+# Test snapshots
+__snapshots__/
+*.snap
