@@ -187,6 +187,10 @@ Running into a setup or runtime error? Check **[docs/FAQ.md](./docs/FAQ.md)** fo
 - JWT token expired during development
 - `docker-compose` port conflict on 5432
 
+## Changelog
+
+See [CHANGELOG.md](./CHANGELOG.md) for a full history of releases following the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
+
 ## License
 
 MIT. Contributions welcome — the roadmap section in [ARCHITECTURE.md](./ARCHITECTURE.md) lists scoped tasks with effort labels.
