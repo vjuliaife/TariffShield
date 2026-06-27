@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from "express";
+import { createHash } from "node:crypto";
 import { Keypair } from "@stellar/stellar-sdk";
 import { z } from "zod";
 import { pool } from "../db.js";
@@ -21,6 +22,10 @@ const CreateImporterSchema = z.object({
   initialRequiredCollateral: z.string().regex(/^\d+$/),
 });
 
+function hashEin(ein?: string): string | null {
+  return ein ? createHash("sha256").update(ein).digest("hex") : null;
+}
+
 importersRouter.post("/", async (req: Request, res: Response) => {
   const user = (req as AuthedRequest).user;
   if (user.role !== "importer") {
@@ -34,6 +39,7 @@ importersRouter.post("/", async (req: Request, res: Response) => {
     return;
   }
   const { legalName, ein, bondId, initialRequiredCollateral } = parse.data;
+  const einHash = hashEin(ein);
 
   const ofacClear = await screenImporterEntity(legalName, ein);
   if (!ofacClear) {
@@ -71,10 +77,10 @@ importersRouter.post("/", async (req: Request, res: Response) => {
   }
 
   const inserted = await pool.query(
-    `INSERT INTO importers (user_id, legal_name, ein, bond_id, stellar_address, stellar_secret_encrypted)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO importers (user_id, legal_name, ein, ein_hash, bond_id, stellar_address, stellar_secret_encrypted)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING id, legal_name, ein, bond_id, stellar_address, created_at`,
-    [user.id, legalName, ein ?? null, bondId, kp.publicKey(), kp.secret()],
+    [user.id, legalName, ein ?? null, einHash, bondId, kp.publicKey(), kp.secret()],
   );
   const importer = inserted.rows[0]!;
 

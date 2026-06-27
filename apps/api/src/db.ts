@@ -109,6 +109,7 @@ export async function migrate(): Promise<void> {
       user_id UUID NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
       legal_name TEXT NOT NULL,
       ein TEXT,
+      ein_hash TEXT,
       bond_id BIGINT UNIQUE NOT NULL,
       stellar_address TEXT NOT NULL,
       stellar_secret_encrypted TEXT,
@@ -317,6 +318,15 @@ export async function migrate(): Promise<void> {
     INSERT INTO field_encryption_key_versions (key_version, notes)
       VALUES (1, 'initial key version')
       ON CONFLICT (key_version) DO NOTHING;
+
+    -- EIN plaintext is scheduled for AES-GCM encryption; ein_hash supports PII-safe equality lookup.
+    CREATE EXTENSION IF NOT EXISTS pgcrypto;
+    ALTER TABLE importers ADD COLUMN IF NOT EXISTS ein_hash TEXT;
+    UPDATE importers
+       SET ein_hash = encode(sha256(ein::bytea), 'hex')
+     WHERE ein IS NOT NULL AND ein_hash IS NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_importers_ein_hash
+      ON importers(ein_hash) WHERE ein_hash IS NOT NULL;
 
     -- EIN is now stored as AES-256-GCM JSON; migrate existing plain text at app layer
     ALTER TABLE importers ADD COLUMN IF NOT EXISTS ein_encrypted TEXT;

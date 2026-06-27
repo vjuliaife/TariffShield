@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { createHash } from "node:crypto";
 import { pool } from "../apps/api/src/db.js";
 import { contractClient, platformKeypair } from "../apps/api/src/stellar.js";
 import { hashPassword } from "../apps/api/src/auth.js";
@@ -32,12 +33,15 @@ program
       const kp = Keypair.random();
       const bondId = Math.floor(Math.random() * 1000000);
       const initialRequired = 0n;
+      const einHash = options.ein
+        ? createHash("sha256").update(options.ein).digest("hex")
+        : null;
 
       const inserted = await pool.query(
-        `INSERT INTO importers (user_id, legal_name, ein, bond_id, stellar_address, stellar_secret_encrypted)
-         VALUES ($1, $2, $3, $4, $5, $6)
+        `INSERT INTO importers (user_id, legal_name, ein, ein_hash, bond_id, stellar_address, stellar_secret_encrypted)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          RETURNING id`,
-        [userId, options.company, options.ein ?? null, bondId, kp.publicKey(), kp.secret()]
+        [userId, options.company, options.ein ?? null, einHash, bondId, kp.publicKey(), kp.secret()]
       );
       const importerId = inserted.rows[0].id;
 
