@@ -35,6 +35,14 @@ All PRs must target the `main` branch. When you open a PR, GitHub will pre-popul
 - The CI suite (type-check, lint, contract tests, audit) must pass.
 - Keep PRs focused — one feature or fix per PR. Large refactors should be discussed in an issue first.
 
+### Pull request size
+
+The PR size check counts added plus deleted lines against the pull request base. PRs at 400 changed lines or more receive an automated warning comment, and PRs at 1000 changed lines or more fail the check so they can be split before review.
+
+Generated files are excluded through [`.prsize-ignore`](.prsize-ignore), including lockfiles, snapshots, `dist/`, and `target/`. If an emergency or mechanical change must exceed the hard limit, a maintainer can apply the `large-pr-approved` label to bypass the check explicitly.
+
+When a change is likely to be large, split it by reviewable behavior: schema first, API follow-up second, UI last; or land preparatory refactors before the feature branch.
+
 ---
 
 ## Conventional Commits
