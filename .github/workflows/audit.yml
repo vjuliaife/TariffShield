@@ -1,0 +1,184 @@
+name: Dependency Audit
+
+on:
+  pull_request:
+    branches: [main, master]
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  audit:
+    name: npm and Cargo dependency audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Run npm audit
+        id: npm_audit
+        shell: bash
+        run: |
+          npm audit --audit-level=critical --json > npm-audit-report.json || true
+          node <<'NODE'
+          const fs = require('node:fs');
+          const report = JSON.parse(fs.readFileSync('npm-audit-report.json', 'utf8'));
+          const critical = report.metadata?.vulnerabilities?.critical || 0;
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `critical=${critical}\n`);
+          console.log(`npm critical vulnerabilities: ${critical}`);
+          NODE
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo audit tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/cargo-audit
+            ~/.cargo/bin/cargo-deny
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-audit-tools-${{ runner.os }}-${{ hashFiles('Cargo.toml', 'contracts/**/Cargo.toml', 'deny.toml') }}
+          restore-keys: |
+            cargo-audit-tools-${{ runner.os }}-
+
+      - name: Install Cargo audit tools
+        shell: bash
+        run: |
+          command -v cargo-audit >/dev/null 2>&1 || cargo install cargo-audit --locked
+          command -v cargo-deny >/dev/null 2>&1 || cargo install cargo-deny --locked
+
+      - name: Run cargo audit
+        id: cargo_audit
+        shell: bash
+        run: |
+          if [ ! -f Cargo.lock ]; then
+            cargo generate-lockfile
+          fi
+          cargo audit --json > cargo-audit-report.json || true
+          node <<'NODE'
+          const fs = require('node:fs');
+          const report = JSON.parse(fs.readFileSync('cargo-audit-report.json', 'utf8'));
+          const advisories = report.vulnerabilities?.list || [];
+          const blocking = advisories.filter((item) => {
+            const advisory = item.advisory || {};
+            const severity = String(advisory.severity || '').toLowerCase();
+            const cvss = Number(advisory.cvss || 0);
+            return severity === 'high' || severity === 'critical' || cvss >= 7;
+          });
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `blocking=${blocking.length}\n`);
+          console.log(`cargo high/critical vulnerabilities: ${blocking.length}`);
+          NODE
+
+      - name: Run cargo deny policy
+        shell: bash
+        run: cargo deny check licenses bans
+
+      - name: Upload npm audit report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: npm-audit-report
+          path: npm-audit-report.json
+          if-no-files-found: error
+
+      - name: Upload Cargo audit report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cargo-audit-report
+          path: cargo-audit-report.json
+          if-no-files-found: error
+
+      - name: Evaluate audit results
+        id: evaluate
+        if: always()
+        shell: bash
+        run: |
+          npm_critical="${{ steps.npm_audit.outputs.critical || '0' }}"
+          cargo_blocking="${{ steps.cargo_audit.outputs.blocking || '0' }}"
+          failed=false
+          if [ "$npm_critical" -gt 0 ] || [ "$cargo_blocking" -gt 0 ]; then
+            failed=true
+          fi
+          echo "failed=$failed" >> "$GITHUB_OUTPUT"
+          echo "npm critical vulnerabilities: $npm_critical"
+          echo "cargo high/critical vulnerabilities: $cargo_blocking"
+
+      - name: Open scheduled audit issue
+        if: always() && github.event_name == 'schedule' && steps.evaluate.outputs.failed == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('node:fs');
+            const today = new Date().toISOString().slice(0, 10);
+
+            function npmFindings() {
+              if (!fs.existsSync('npm-audit-report.json')) return [];
+              const report = JSON.parse(fs.readFileSync('npm-audit-report.json', 'utf8'));
+              return Object.values(report.vulnerabilities || {})
+                .filter((item) => item.severity === 'critical')
+                .map((item) => {
+                  const advisories = (item.via || [])
+                    .filter((via) => typeof via === 'object')
+                    .map((via) => via.url || via.title || via.source)
+                    .filter(Boolean)
+                    .join(', ');
+                  return `- npm: ${item.name} (${item.severity})${advisories ? ` - ${advisories}` : ''}`;
+                });
+            }
+
+            function cargoFindings() {
+              if (!fs.existsSync('cargo-audit-report.json')) return [];
+              const report = JSON.parse(fs.readFileSync('cargo-audit-report.json', 'utf8'));
+              return (report.vulnerabilities?.list || [])
+                .filter((item) => {
+                  const advisory = item.advisory || {};
+                  const severity = String(advisory.severity || '').toLowerCase();
+                  const cvss = Number(advisory.cvss || 0);
+                  return severity === 'high' || severity === 'critical' || cvss >= 7;
+                })
+                .map((item) => {
+                  const advisory = item.advisory || {};
+                  const pkg = item.package?.name || 'unknown';
+                  const id = advisory.id || 'unknown advisory';
+                  const title = advisory.title || 'untitled advisory';
+                  return `- cargo: ${pkg} ${id} - ${title}`;
+                });
+            }
+
+            const findings = [...npmFindings(), ...cargoFindings()];
+            const body = [
+              'The scheduled dependency audit found blocking vulnerabilities.',
+              '',
+              findings.length ? findings.join('\n') : '- See attached workflow audit artifacts for details.',
+              '',
+              'Artifacts:',
+              '- npm-audit-report.json',
+              '- cargo-audit-report.json',
+              '',
+              'Critical vulnerabilities should be triaged within 24 hours per docs/security.md.',
+            ].join('\n');
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Security: dependency vulnerability found - ${today}`,
+              body,
+            });
+
+      - name: Fail on blocking vulnerabilities
+        if: steps.evaluate.outputs.failed == 'true'
+        run: exit 1
