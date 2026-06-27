@@ -1,0 +1,30 @@
+name: Dependency Scan
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          
+      - name: NPM Audit
+        run: npm audit --audit-level=critical
+        
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          
+      - name: Cargo Audit
+        run: |
+          cargo install cargo-audit
+          cd contracts/tariff-shield && cargo audit -D warnings

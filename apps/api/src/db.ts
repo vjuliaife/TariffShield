@@ -181,6 +181,20 @@ export async function migrate(): Promise<void> {
 
     CREATE INDEX IF NOT EXISTS idx_security_incidents_severity ON security_incidents(severity, detected_at DESC);
 
+    -- #325: Automated DAST and security findings
+    CREATE TABLE IF NOT EXISTS security_findings (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      severity TEXT NOT NULL CHECK (severity IN ('CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO')),
+      affected_endpoint TEXT,
+      discovery_date TIMESTAMPTZ NOT NULL DEFAULT now(),
+      remediation_sla TIMESTAMPTZ NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'resolved', 'accepted_risk')),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_security_findings_status_severity ON security_findings(status, severity);
+
     CREATE TABLE IF NOT EXISTS data_erasure_requests (
       id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
       request_id TEXT UNIQUE NOT NULL,
@@ -476,4 +490,19 @@ export async function createDataErasureRequest(
     "insert_erasure_request",
   );
   return result.rows[0]?.id ?? "";
+}
+
+export async function getVulnerabilityMetrics(): Promise<any[]> {
+  const result = await timedQuery(
+    `SELECT
+      severity,
+      COUNT(*) as open_findings,
+      AVG(EXTRACT(EPOCH FROM (updated_at - discovery_date))) as mean_time_to_remediate_seconds
+     FROM security_findings
+     WHERE status = 'open'
+     GROUP BY severity`,
+    [],
+    "get_vulnerability_metrics"
+  );
+  return result.rows;
 }

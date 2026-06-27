@@ -1,0 +1,33 @@
+rules:
+  - id: tariffshield-hardcoded-secrets
+    languages: [javascript, typescript]
+    message: "Potential hardcoded secret or private key assignment detected."
+    severity: ERROR
+    pattern-either:
+      - pattern: |
+          $VAR = "S$KEY"
+        metavariable-regex:
+          metavariable: $KEY
+          regex: '^[A-Z2-7]{55}$'
+      - pattern: |
+          const $VAR = "S$KEY";
+        metavariable-regex:
+          metavariable: $KEY
+          regex: '^[A-Z2-7]{55}$'
+
+  - id: tariffshield-missing-authorization-check
+    languages: [javascript, typescript]
+    message: "Administrative endpoints must enforce the 'surety_admin' role boundary check."
+    severity: ERROR
+    patterns:
+      - pattern-either:
+          - pattern: |
+              $ROUTER.post($PATH, async (req, res) => {
+                ...
+              })
+          - pattern: |
+              $ROUTER.post($PATH, (req, res) => {
+                ...
+              })
+      - pattern-regex: "(clawback|yield|accrue)"
+      - pattern-not-regex: "(user\\.role\\s*===\\s*['\"]surety_admin['\"]|user\\.role\\s*!==\\s*['\"]importer['\"])"
