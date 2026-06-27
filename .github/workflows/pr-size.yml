@@ -39,12 +39,20 @@ jobs:
           const head = process.env.HEAD_SHA;
           const ignorePath = '.prsize-ignore';
 
-          const patterns = fs.existsSync(ignorePath)
-            ? fs.readFileSync(ignorePath, 'utf8')
-                .split(/\r?\n/)
-                .map((line) => line.trim())
-                .filter((line) => line && !line.startsWith('#'))
-            : [];
+          let ignoreText = '';
+          try {
+            ignoreText = execFileSync('git', ['show', `${base}:${ignorePath}`], {
+              encoding: 'utf8',
+              stdio: ['ignore', 'pipe', 'ignore'],
+            });
+          } catch {
+            ignoreText = '';
+          }
+
+          const patterns = ignoreText
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter((line) => line && !line.startsWith('#'));
 
           function escapeRegex(value) {
             return value.replace(/[|\\{}()[\]^$+?.]/g, '\\$&');
