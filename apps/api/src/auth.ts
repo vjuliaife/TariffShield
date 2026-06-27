@@ -95,12 +95,9 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
   }
   (req as AuthedRequest).user = payload;
 
-  // SOC 2 CC6.1: validate server-side session (15-min inactivity timeout).
-  //
-  // Tokens without sessionId were issued before session management was deployed.
-  // They are rejected rather than accepted to prevent legacy-token bypass. Any
-  // client that receives a 401 here must re-authenticate, which will produce a
-  // token with a sessionId.
+  // SOC 2 CC6.1: every valid token must carry a sessionId.
+  // All token-issuing paths (login, signup, SAML callback) create a session row
+  // and embed the sessionId in the JWT, so this rejects only forged or pre-rollout tokens.
   if (!payload.sessionId) {
     res.status(401).json({ error: "re-authentication required" });
     return;
@@ -146,7 +143,10 @@ export function privacyReacceptanceGate(req: Request, res: Response, next: NextF
   const isExempt = PRIVACY_EXEMPT_PATHS.some(p => req.path.includes(p));
   if (isExempt) { next(); return; }
 
-  // Async check — look up live DB value (not stale JWT claim)
+  // Async check — look up live DB value (not stale JWT claim). Fail closed:
+  // if the DB is unreachable we cannot confirm acceptance status, so the
+  // request is blocked. authMiddleware's session validation runs first and
+  // will 503 on a full DB outage before this gate is ever reached.
   pool.query<{ privacy_reacceptance_required: boolean }>(
     "SELECT privacy_reacceptance_required FROM users WHERE id = $1",
     [user.id],
@@ -160,5 +160,7 @@ export function privacyReacceptanceGate(req: Request, res: Response, next: NextF
       return;
     }
     next();
-  }).catch(() => next()); // fail-open: don't block if DB unreachable
+  }).catch(() => {
+    res.status(503).json({ error: "service temporarily unavailable" });
+  });
 }
