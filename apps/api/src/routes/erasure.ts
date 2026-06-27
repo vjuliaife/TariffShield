@@ -1,10 +1,12 @@
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { pool, createDataErasureRequest } from "../db.js";
-import { authMiddleware, type AuthedRequest } from "../auth.js";
+import { authMiddleware, privacyReacceptanceGate, tosReacceptanceGate, type AuthedRequest } from "../auth.js";
 
 export const erasureRouter = Router();
 erasureRouter.use(authMiddleware);
+erasureRouter.use(privacyReacceptanceGate);
+erasureRouter.use(tosReacceptanceGate);
 
 const ErasureRequestSchema = z.object({
   reason: z.string().optional(),
@@ -30,6 +32,10 @@ erasureRouter.post("/account/erasure-request", async (req: Request, res: Respons
   );
 
   const request = result.rows[0];
+  if (!request) {
+    res.status(500).json({ error: "failed to retrieve erasure request" });
+    return;
+  }
   res.status(202).json({
     requestId: request.request_id,
     status: request.status,
@@ -55,6 +61,10 @@ erasureRouter.get("/account/erasure-request/:requestId", async (req: Request, re
   }
 
   const request = result.rows[0];
+  if (!request) {
+    res.status(404).json({ error: "request not found" });
+    return;
+  }
   res.json({
     requestId: request.request_id,
     status: request.status,

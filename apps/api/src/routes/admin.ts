@@ -1,12 +1,13 @@
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { pool } from "../db.js";
-import { authMiddleware, requireRole, privacyReacceptanceGate, type AuthedRequest } from "../auth.js";
+import { authMiddleware, requireRole, privacyReacceptanceGate, tosReacceptanceGate, type AuthedRequest } from "../auth.js";
 import { platformKeypair, oracleKeypair } from "../stellar.js";
 
 export const adminRouter = Router();
 adminRouter.use(authMiddleware);
 adminRouter.use(privacyReacceptanceGate);
+adminRouter.use(tosReacceptanceGate);
 
 adminRouter.get("/oracle-alerts", async (req: Request, res: Response) => {
   const user = (req as AuthedRequest).user;

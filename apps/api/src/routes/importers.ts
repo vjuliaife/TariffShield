@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from "express";
 import { Keypair } from "@stellar/stellar-sdk";
 import { z } from "zod";
 import { pool } from "../db.js";
-import { authMiddleware, privacyReacceptanceGate, type AuthedRequest } from "../auth.js";
+import { authMiddleware, privacyReacceptanceGate, tosReacceptanceGate, type AuthedRequest } from "../auth.js";
 import { contractClient, explorerTx, platformKeypair, suretyKeypair } from "../stellar.js";
 import { lookupCbpDutyRate } from "../services/cbp-duty-lookup.js";
 import { screenImporterEntity, screenWalletAddress } from "../services/aml-screening.js";
@@ -12,6 +12,7 @@ import { env } from "../config/env.js";
 export const importersRouter = Router();
 importersRouter.use(authMiddleware);
 importersRouter.use(privacyReacceptanceGate);
+importersRouter.use(tosReacceptanceGate);
 
 const CreateImporterSchema = z.object({
   legalName: z.string().min(1),

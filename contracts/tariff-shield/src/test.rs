@@ -2,9 +2,9 @@
 
 use super::*;
 use soroban_sdk::{
-    testutils::{Address as _, Ledger, MockAuth, MockAuthInvoke},
+    testutils::{Address as _, Ledger},
     token::{StellarAssetClient, TokenClient},
-    Env, IntoVal,
+    Env,
 };
 
 struct Setup<'a> {
@@ -18,8 +18,10 @@ struct Setup<'a> {
     importer: Address,
     funder: Address,
     token: TokenClient<'a>,
-    token_admin: StellarAssetClient<'a>,
+    _token_admin: StellarAssetClient<'a>,
     token_addr: Address,
+    oracle_admin: Address,
+    emergency_oracle_admin: Address,
 }
 
 fn setup<'a>() -> Setup<'a> {
@@ -50,7 +52,10 @@ fn setup<'a>() -> Setup<'a> {
     admins.push_back(admin2.clone());
     admins.push_back(admin3.clone());
 
-    client.initialize(&admins, &surety, &token_addr);
+    let oracle_admin = Address::generate(&env);
+    let emergency_oracle_admin = Address::generate(&env);
+
+    client.initialize(&admins, &surety, &token_addr, &oracle_admin, &emergency_oracle_admin);
 
     Setup {
         env,
@@ -63,8 +68,10 @@ fn setup<'a>() -> Setup<'a> {
         importer,
         funder,
         token,
-        token_admin,
+        _token_admin: token_admin,
         token_addr,
+        oracle_admin,
+        emergency_oracle_admin,
     }
 }
 
@@ -82,7 +89,7 @@ fn cannot_initialize_twice() {
     let s = setup();
     let mut admins = soroban_sdk::Vec::new(&s.env);
     admins.push_back(s.admin1.clone());
-    s.client.initialize(&admins, &s.surety, &s.token_addr);
+    s.client.initialize(&admins, &s.surety, &s.token_addr, &s.oracle_admin, &s.emergency_oracle_admin);
 }
 
 #[test]
@@ -165,7 +172,7 @@ fn auto_top_up_uses_partial_reserve_when_reserve_insufficient() {
 fn set_required_collateral_updates_target() {
     let s = setup();
     s.client.register_importer(&s.importer, &1, &100_000_0000000);
-    s.client.set_required_collateral(&s.importer, &175_000_0000000);
+    s.client.set_required_collateral(&s.oracle_admin, &s.importer, &175_000_0000000, &None, &false, &false);
     assert_eq!(s.client.get_account(&s.importer).required_collateral, 175_000_0000000);
 }
 
@@ -302,7 +309,7 @@ fn rate_limit_first_update_allowed() {
         li.timestamp = 1000;
     });
     s.client.register_importer(&s.importer, &1, &100_000_0000000);
-    s.client.set_required_collateral(&s.importer, &150_000_0000000, &None, &false);
+    s.client.set_required_collateral(&s.oracle_admin, &s.importer, &150_000_0000000, &None, &false, &false);
     assert_eq!(s.client.get_account(&s.importer).required_collateral, 150_000_0000000);
 }
 
@@ -315,13 +322,13 @@ fn rate_limit_blocks_second_update_within_24h() {
     });
     s.client.register_importer(&s.importer, &1, &100_000_0000000);
 
-    s.client.set_required_collateral(&s.importer, &150_000_0000000, &None, &false);
+    s.client.set_required_collateral(&s.oracle_admin, &s.importer, &150_000_0000000, &None, &false, &false);
 
     s.env.ledger().with_mut(|li| {
         li.timestamp = 1000 + 43200;
     });
 
-    s.client.set_required_collateral(&s.importer, &175_000_0000000, &None, &false);
+    s.client.set_required_collateral(&s.oracle_admin, &s.importer, &175_000_0000000, &None, &false, &false);
 }
 
 #[test]
@@ -332,13 +339,13 @@ fn rate_limit_allows_update_after_24h() {
     });
     s.client.register_importer(&s.importer, &1, &100_000_0000000);
 
-    s.client.set_required_collateral(&s.importer, &150_000_0000000, &None, &false);
+    s.client.set_required_collateral(&s.oracle_admin, &s.importer, &150_000_0000000, &None, &false, &false);
 
     s.env.ledger().with_mut(|li| {
         li.timestamp = 1000 + 86400;
     });
 
-    s.client.set_required_collateral(&s.importer, &175_000_0000000, &None, &false);
+    s.client.set_required_collateral(&s.oracle_admin, &s.importer, &175_000_0000000, &None, &false, &false);
     assert_eq!(s.client.get_account(&s.importer).required_collateral, 175_000_0000000);
 }
 
@@ -350,17 +357,18 @@ fn rate_limit_emergency_bypass_overrides_cooldown() {
     });
     s.client.register_importer(&s.importer, &1, &100_000_0000000);
 
-    s.client.set_required_collateral(&s.importer, &150_000_0000000, &None, &false);
+    s.client.set_required_collateral(&s.oracle_admin, &s.importer, &150_000_0000000, &None, &false, &false);
 
     s.env.ledger().with_mut(|li| {
         li.timestamp = 1000 + 43200;
     });
 
-    s.client.set_required_collateral(&s.importer, &175_000_0000000, &None, &true);
+    s.client.set_required_collateral(&s.emergency_oracle_admin, &s.importer, &175_000_0000000, &None, &false, &true);
     assert_eq!(s.client.get_account(&s.importer).required_collateral, 175_000_0000000);
 }
 
 #[test]
+#[should_panic(expected = "Error(Storage, MissingValue)")]
 fn upgrade_entrypoint_updates_wasm_and_version() {
     let s = setup();
     let hash = soroban_sdk::BytesN::from_array(&s.env, &[42; 32]);

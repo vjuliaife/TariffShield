@@ -1,10 +1,12 @@
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { pool } from "../db.js";
-import { authMiddleware, requireRole, type AuthedRequest } from "../auth.js";
+import { authMiddleware, requireRole, privacyReacceptanceGate, tosReacceptanceGate, type AuthedRequest } from "../auth.js";
 
 export const complianceRouter = Router();
 complianceRouter.use(authMiddleware);
+complianceRouter.use(privacyReacceptanceGate);
+complianceRouter.use(tosReacceptanceGate);
 complianceRouter.use(requireRole("surety_admin"));
 
 // 5-minute dashboard cache keyed by surety_id (#318).

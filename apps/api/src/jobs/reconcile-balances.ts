@@ -41,7 +41,7 @@ export async function reconcileBalances(): Promise<void> {
 
     for (const bond of bonds) {
       try {
-        const onChainBalanceStr = await getBondOnChain(bond.bondId);
+        const onChainBalanceStr = await getBondOnChain(bond.stellarAddress);
         const dbBalance = parseFloat(bond.dbBalance);
         const onChainBalance = parseFloat(onChainBalanceStr);
 

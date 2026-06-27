@@ -10,7 +10,7 @@
 
 use soroban_sdk::{
     contract, contractimpl, contracttype, panic_with_error, symbol_short, token, Address, BytesN, Env,
-    Symbol, Vec, InvokeContract,
+    Symbol, Vec,
 };
 
 mod errors;
@@ -34,6 +34,8 @@ pub enum DataKey {
     Version,
     // #339 — dedicated oracle role; can set_required_collateral but not upgrade/register
     OracleAdmin,
+    EmergencyOracleAdmin,
+    HasUpdated(Address),
 }
 
 #[contracttype]
@@ -65,6 +67,7 @@ impl TariffShieldContract {
         surety: Address,
         token: Address,
         oracle_admin: Address,
+        emergency_oracle_admin: Address,
     ) {
         if env.storage().instance().has(&DataKey::Admins) {
             panic_with_error!(&env, Error::AlreadyInitialized);
@@ -73,10 +76,12 @@ impl TariffShieldContract {
             admin.require_auth();
         }
         oracle_admin.require_auth();
+        emergency_oracle_admin.require_auth();
         env.storage().instance().set(&DataKey::Admins, &admins);
         env.storage().instance().set(&DataKey::Surety, &surety);
         env.storage().instance().set(&DataKey::Token, &token);
         env.storage().instance().set(&DataKey::OracleAdmin, &oracle_admin);
+        env.storage().instance().set(&DataKey::EmergencyOracleAdmin, &emergency_oracle_admin);
         env.storage().instance().set(&DataKey::ProposalCounter, &0u64);
     }
 
@@ -152,14 +157,26 @@ impl TariffShieldContract {
 
     pub fn set_required_collateral(
         env: Env,
+        caller: Address,
         importer: Address,
         new_required: i128,
         price_oracle_contract: Option<Address>,
         bypass_rate_limit: bool,
+        emergency: bool,
     ) {
-        // #339 — only the oracle admin may call this; general admin cannot
-        let oracle_admin = get_oracle_admin(&env);
-        oracle_admin.require_auth();
+        caller.require_auth();
+        if emergency {
+            let emergency_admin = get_emergency_oracle_admin(&env);
+            if caller != emergency_admin {
+                panic_with_error!(&env, Error::UnauthorizedEmergencyOverride);
+            }
+        } else {
+            let oracle_admin = get_oracle_admin(&env);
+            if caller != oracle_admin {
+                panic_with_error!(&env, Error::UnauthorizedRole);
+            }
+        }
+
         if new_required < 0 {
             panic_with_error!(&env, Error::InvalidAmount);
         }
@@ -167,7 +184,9 @@ impl TariffShieldContract {
         let current_timestamp = env.ledger().timestamp();
 
         let cooldown_seconds: u64 = 86400;
-        if !bypass_rate_limit && acct.collateral_last_updated > 0 {
+        let has_updated_key = DataKey::HasUpdated(importer.clone());
+        let has_been_updated = env.storage().persistent().has(&has_updated_key);
+        if !bypass_rate_limit && !emergency && has_been_updated && acct.collateral_last_updated > 0 {
             if current_timestamp < acct.collateral_last_updated + cooldown_seconds {
                 let retry_after = acct.collateral_last_updated + cooldown_seconds;
                 env.events().publish(
@@ -203,10 +222,18 @@ impl TariffShieldContract {
         acct.required_collateral = adjusted_required;
         acct.collateral_last_updated = current_timestamp;
         save_account(&env, &importer, &acct);
-        env.events().publish(
-            (symbol_short!("required"), importer.clone()),
-            (old_required, adjusted_required),
-        );
+        env.storage().persistent().set(&has_updated_key, &true);
+        if emergency {
+            env.events().publish(
+                (Symbol::new(&env, "EmergencyOracleUpdate"), importer.clone()),
+                (old_required, adjusted_required, current_timestamp, caller),
+            );
+        } else {
+            env.events().publish(
+                (symbol_short!("required"), importer.clone()),
+                (old_required, adjusted_required),
+            );
+        }
     }
 
     pub fn auto_top_up(env: Env, importer: Address) -> i128 {
@@ -508,17 +535,22 @@ fn get_oracle_admin(env: &Env) -> Address {
         .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized))
 }
 
+fn get_emergency_oracle_admin(env: &Env) -> Address {
+    env.storage()
+        .instance()
+        .get(&DataKey::EmergencyOracleAdmin)
+        .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized))
+}
+
 fn get_price_oracle_optional(env: &Env) -> Option<Address> {
     env.storage().instance().get(&DataKey::PriceOracle)
 }
 
 fn get_usdc_usd_rate(env: &Env, oracle: &Address) -> i128 {
-    use soroban_sdk::InvokeContract;
-
     let rate: i128 = env
         .invoke_contract(
             oracle,
-            &symbol_short!("get_usdc_usd_rate"),
+            &Symbol::new(env, "get_usdc_usd_rate"),
             soroban_sdk::Vec::new(env),
         );
     rate

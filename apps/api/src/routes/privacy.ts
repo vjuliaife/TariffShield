@@ -2,10 +2,12 @@
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { pool } from "../db.js";
-import { authMiddleware, type AuthedRequest } from "../auth.js";
+import { authMiddleware, privacyReacceptanceGate, tosReacceptanceGate, type AuthedRequest } from "../auth.js";
 
 export const privacyRouter = Router();
 privacyRouter.use(authMiddleware);
+privacyRouter.use(privacyReacceptanceGate);
+privacyRouter.use(tosReacceptanceGate);
 
 // GET /api/v1/account/privacy-policy-history — user's acceptance history
 privacyRouter.get("/privacy-policy-history", async (req: Request, res: Response) => {

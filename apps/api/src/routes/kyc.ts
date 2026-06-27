@@ -1,12 +1,14 @@
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { pool } from "../db.js";
-import { authMiddleware, requireRole, type AuthedRequest } from "../auth.js";
+import { authMiddleware, requireRole, privacyReacceptanceGate, tosReacceptanceGate, type AuthedRequest } from "../auth.js";
 import { encryptFieldToJson, decryptFieldFromJson } from "../lib/field-encryption.js";
 import { env } from "../config/env.js";
 
 export const kycRouter = Router();
 kycRouter.use(authMiddleware);
+kycRouter.use(privacyReacceptanceGate);
+kycRouter.use(tosReacceptanceGate);
 
 // BSA requires 5-year retention from last transaction; we track scheduled_deletion_date.
 // In production, S3 keys are stored encrypted; actual documents never touch the DB.

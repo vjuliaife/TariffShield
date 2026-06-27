@@ -56,6 +56,8 @@ export function requireRole(role: AuthPayload["role"]) {
 // Exempt: the accept-privacy-policy endpoint itself and the current-version endpoint.
 const PRIVACY_EXEMPT_PATHS = [
   "/account/accept-privacy-policy",
+  "/account/accept-tos",
+  "/account/tos-history",
   "/privacy/current-version",
   "/auth/",
 ];
@@ -82,4 +84,27 @@ export function privacyReacceptanceGate(req: Request, res: Response, next: NextF
     }
     next();
   }).catch(() => next()); // fail-open: don't block if DB unreachable
+}
+
+export function tosReacceptanceGate(req: Request, res: Response, next: NextFunction): void {
+  const user = (req as AuthedRequest).user;
+  if (!user) { next(); return; }
+
+  const isExempt = PRIVACY_EXEMPT_PATHS.some(p => req.path.includes(p));
+  if (isExempt) { next(); return; }
+
+  pool.query<{ tos_reacceptance_required: boolean }>(
+    "SELECT tos_reacceptance_required FROM users WHERE id = $1",
+    [user.id],
+  ).then(result => {
+    if (result.rows[0]?.tos_reacceptance_required) {
+      res.status(403).json({
+        error: "terms of service update requires re-acceptance",
+        reason: "tos_acceptance_required",
+        action: "POST /api/v1/account/accept-tos",
+      });
+      return;
+    }
+    next();
+  }).catch(() => next());
 }

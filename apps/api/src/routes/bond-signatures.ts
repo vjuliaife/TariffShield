@@ -11,13 +11,14 @@
 import crypto from "node:crypto";
 import { Router, type Request, type Response } from "express";
 import { pool } from "../db.js";
-import { authMiddleware, requireRole, privacyReacceptanceGate, type AuthedRequest } from "../auth.js";
+import { authMiddleware, requireRole, privacyReacceptanceGate, tosReacceptanceGate, type AuthedRequest } from "../auth.js";
 import { env } from "../config/env.js";
 
 // bondSignaturesRouter — authenticated routes (send-for-signature, status, reminder)
 export const bondSignaturesRouter = Router();
 bondSignaturesRouter.use(authMiddleware);
 bondSignaturesRouter.use(privacyReacceptanceGate);
+bondSignaturesRouter.use(tosReacceptanceGate);
 
 // bondWebhookRouter — unauthenticated (DocuSign Connect); mounted separately in index.ts
 export const bondWebhookRouter = Router();

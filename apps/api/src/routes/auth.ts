@@ -10,6 +10,9 @@ const SignupSchema = z.object({
   email: z.string().email().toLowerCase(),
   password: z.string().min(8),
   role: z.enum(["importer", "surety_admin"]).default("importer"),
+  accept_tos: z.boolean().refine((val) => val === true, {
+    message: "Terms of Service must be accepted",
+  }),
   // #322 — accept the current privacy policy version at signup
   privacyPolicyVersionId: z.string().optional(),
 });
@@ -46,6 +49,16 @@ authRouter.post("/signup", async (req: Request, res: Response) => {
          VALUES ($1, $2, $3, 'signup')
          ON CONFLICT (user_id, policy_version_id) DO NOTHING`,
         [u.id, policyVersionId, req.ip ?? null],
+      );
+    }
+
+    // Record ToS acceptance at signup (#321)
+    const latestTos = await pool.query("SELECT version_id FROM tos_versions ORDER BY effective_date DESC LIMIT 1");
+    if (latestTos.rowCount) {
+      await pool.query(
+        `INSERT INTO tos_acceptances (user_id, tos_version, accepted_at, ip_address, user_agent, acceptance_method)
+         VALUES ($1, $2, now(), $3, $4, 'signup')`,
+        [u.id, latestTos.rows[0]?.version_id, req.ip ?? null, req.get("user-agent") ?? null],
       );
     }
 

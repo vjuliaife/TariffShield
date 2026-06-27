@@ -242,6 +242,33 @@ export async function migrate(): Promise<void> {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_saml_subject ON users(saml_subject_id, idp_entity_id)
       WHERE saml_subject_id IS NOT NULL;
 
+    -- #321: Terms of Service versioning and tracking
+    CREATE TABLE IF NOT EXISTS tos_versions (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      version_id TEXT UNIQUE NOT NULL,
+      effective_date DATE NOT NULL,
+      change_summary TEXT NOT NULL,
+      requires_reacceptance BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS tos_acceptances (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+      tos_version TEXT NOT NULL REFERENCES tos_versions(version_id),
+      accepted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      ip_address TEXT,
+      user_agent TEXT,
+      acceptance_method TEXT NOT NULL CHECK (acceptance_method IN ('signup', 're-acceptance'))
+    );
+
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS tos_reacceptance_required BOOLEAN NOT NULL DEFAULT FALSE;
+
+    -- Insert an initial ToS version if it doesn't exist
+    INSERT INTO tos_versions (version_id, effective_date, change_summary)
+      VALUES ('v1.0.0', CURRENT_DATE, 'Initial Terms of Service')
+      ON CONFLICT (version_id) DO NOTHING;
+
     -- #322: privacy policy versioning
     CREATE TABLE IF NOT EXISTS privacy_policy_versions (
       id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -283,7 +310,9 @@ export async function migrate(): Promise<void> {
       signed_document_hash TEXT,
       completed_at TIMESTAMPTZ,
       pdf_s3_key TEXT,
-      last_reminder_sent_at TIMESTAMPTZ,
+      last_reminder_sent_at TIMESTAMPTZ
+    );
+
     -- #312: KYC document storage with retention schedule
     CREATE TABLE IF NOT EXISTS kyc_documents (
       id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -402,12 +431,13 @@ export async function ping(): Promise<void> {
 /**
  * Returns all bonds that have been registered on-chain.
  */
-export async function getActiveBonds(): Promise<{ bondId: string; dbBalance: string }[]> {
+export async function getActiveBonds(): Promise<{ bondId: string; stellarAddress: string; dbBalance: string }[]> {
   const result = await pool.query(
-    "SELECT bond_id, collateral_balance FROM importers WHERE registered_on_chain_tx IS NOT NULL"
+    "SELECT bond_id, stellar_address, collateral_balance FROM importers WHERE registered_on_chain_tx IS NOT NULL"
   );
   return result.rows.map((row) => ({
     bondId: row.bond_id,
+    stellarAddress: row.stellar_address,
     dbBalance: row.collateral_balance,
   }));
 }

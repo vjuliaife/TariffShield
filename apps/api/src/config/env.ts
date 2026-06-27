@@ -23,6 +23,10 @@ export const Env = z.object({
   ORACLE_ALERT_THRESHOLD_PCT: z.coerce.number().default(50).describe("Alert threshold for collateral change"),
   ALERT_CHANNEL: z.string().default("console").describe("Alert channel for oracle monitor"),
 
+  // #332 / #334 — price oracle and emergency admin secrets
+  PRICE_ORACLE_CONTRACT_ID: z.string().startsWith("C").min(56).optional().describe("Soroban contract ID for the USDC/USD price oracle"),
+  EMERGENCY_ADMIN_SECRET: z.string().startsWith("S").min(56).optional().describe("Emergency oracle admin Stellar secret key"),
+
   // #339 — separate oracle role keypair
   ORACLE_STELLAR_SECRET: z.string().startsWith("S").min(56).optional().describe("Oracle-role Stellar secret key (separate from PLATFORM_STELLAR_SECRET)"),
 
