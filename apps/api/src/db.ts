@@ -390,6 +390,46 @@ export async function migrate(): Promise<void> {
     );
 
     CREATE INDEX IF NOT EXISTS idx_compliance_reports_surety ON compliance_reports(surety_id, report_month DESC);
+
+    -- #324: insurance license verification for surety_admin accounts
+    -- A surety_admin is created with status='pending'; operational routes are blocked
+    -- until a platform admin sets status='verified' after checking NAIC / state DOI records.
+    CREATE TABLE IF NOT EXISTS surety_license_verifications (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      user_id UUID NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+      naic_number TEXT,
+      company_name TEXT NOT NULL DEFAULT '',
+      state_of_domicile TEXT NOT NULL DEFAULT '',
+      am_best_rating TEXT,
+      license_status_detail TEXT,
+      status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'submitted', 'verified', 'rejected')),
+      submitted_at TIMESTAMPTZ,
+      reviewed_at TIMESTAMPTZ,
+      reviewer_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      rejection_reason TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_surety_license_verifications_status
+      ON surety_license_verifications(status, created_at DESC);
+
+    -- #336: off-chain tracking of on-chain collateral disputes
+    CREATE TABLE IF NOT EXISTS collateral_disputes (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      importer_id UUID NOT NULL REFERENCES importers(id) ON DELETE CASCADE,
+      old_required NUMERIC(20, 0) NOT NULL,
+      new_required NUMERIC(20, 0) NOT NULL,
+      raise_tx_hash TEXT,
+      status TEXT NOT NULL DEFAULT 'open'
+        CHECK (status IN ('open', 'resolved_accepted', 'resolved_rejected')),
+      raised_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      resolved_at TIMESTAMPTZ,
+      resolve_tx_hash TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_collateral_disputes_importer
+      ON collateral_disputes(importer_id, raised_at DESC);
   `,
     undefined,
     "migrate_schema",

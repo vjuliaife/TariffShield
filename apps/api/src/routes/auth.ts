@@ -62,6 +62,17 @@ authRouter.post("/signup", async (req: Request, res: Response) => {
       );
     }
 
+    // #324 — surety_admin accounts start with a pending license verification record.
+    // Operational routes (clawback, accrue-yield) are blocked until a platform admin
+    // marks the record as 'verified' after checking NAIC / state DOI licensing data.
+    if (role === "surety_admin") {
+      await pool.query(
+        `INSERT INTO surety_license_verifications (user_id) VALUES ($1)
+         ON CONFLICT (user_id) DO NOTHING`,
+        [u.id],
+      );
+    }
+
     res.json({ token: signToken({ id: u.id, email: u.email, role: u.role }), user: u });
   } catch (err) {
     const e = err as { code?: string };

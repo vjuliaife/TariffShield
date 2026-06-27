@@ -46,6 +46,14 @@ pub struct Proposal {
     pub expiry_ledger: u32,
 }
 
+// #331 — one entry in the rolling on-chain audit trail
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CollateralHistoryEntry {
+    pub value: i128,
+    pub timestamp: u64,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Account {
@@ -55,7 +63,20 @@ pub struct Account {
     pub reserve_balance: i128,
     pub yield_accrued: i128,
     pub is_clawbacked: bool,
+    // Updated whenever collateral state changes (for staleness check).
     pub collateral_last_updated: u64,
+    // #331 — rolling history of the last 12 oracle-set required_collateral values.
+    pub collateral_history: Vec<CollateralHistoryEntry>,
+    // #336 — 72-hour dispute window fields.
+    // Timestamp until which the importer may raise a dispute (0 = no open window).
+    pub dispute_expires_at: u64,
+    // The required_collateral value in effect before the last oracle update.
+    pub pre_dispute_required: i128,
+    // True once the importer formally raises a dispute; cleared by resolve_dispute.
+    pub dispute_raised: bool,
+    // #326 — tracks the last time the oracle set required_collateral separately from
+    // collateral_last_updated so that the rate-limit window does not count registration.
+    pub oracle_last_updated: u64,
 }
 
 #[contractimpl]
@@ -102,7 +123,14 @@ impl TariffShieldContract {
             reserve_balance: 0,
             yield_accrued: 0,
             is_clawbacked: false,
+            // Registration sets the staleness clock; oracle_last_updated stays 0 so the
+            // first set_required_collateral call is not blocked by the 24-hour rate limit.
             collateral_last_updated: env.ledger().timestamp(),
+            collateral_history: Vec::new(&env),
+            dispute_expires_at: 0,
+            pre_dispute_required: required_collateral,
+            dispute_raised: false,
+            oracle_last_updated: 0,
         };
         env.storage().persistent().set(&key, &account);
         env.events().publish(
@@ -183,12 +211,13 @@ impl TariffShieldContract {
         let mut acct = load_account(&env, &importer);
         let current_timestamp = env.ledger().timestamp();
 
+        // Rate limit: max one oracle update per 24 hours.
+        // Uses oracle_last_updated (not collateral_last_updated) so registration does
+        // not count against the first oracle update.
         let cooldown_seconds: u64 = 86400;
-        let has_updated_key = DataKey::HasUpdated(importer.clone());
-        let has_been_updated = env.storage().persistent().has(&has_updated_key);
-        if !bypass_rate_limit && !emergency && has_been_updated && acct.collateral_last_updated > 0 {
-            if current_timestamp < acct.collateral_last_updated + cooldown_seconds {
-                let retry_after = acct.collateral_last_updated + cooldown_seconds;
+        if !bypass_rate_limit && !emergency && acct.oracle_last_updated > 0 {
+            if current_timestamp < acct.oracle_last_updated + cooldown_seconds {
+                let retry_after = acct.oracle_last_updated + cooldown_seconds;
                 env.events().publish(
                     (symbol_short!("ratelimit"), importer.clone()),
                     retry_after,
@@ -219,10 +248,40 @@ impl TariffShieldContract {
         }
 
         let old_required = acct.required_collateral;
+
+        // #326 — reject any single update that more than 5× the current value.
+        // Allows large legitimate increases through multi-step escalation while
+        // bounding the damage from a compromised or misconfigured oracle key.
+        if old_required > 0 && adjusted_required > old_required.saturating_mul(5) {
+            panic_with_error!(&env, Error::CollateralCapExceeded);
+        }
+
+        // #331 — append the old value to the rolling on-chain audit trail before update.
+        let entry = CollateralHistoryEntry {
+            value: old_required,
+            timestamp: current_timestamp,
+        };
+        acct.collateral_history.push_back(entry);
+        let hist_len = acct.collateral_history.len();
+        if hist_len > 12 {
+            let start = hist_len - 12;
+            let mut trimmed = Vec::new(&env);
+            for i in start..hist_len {
+                trimmed.push_back(acct.collateral_history.get(i).unwrap());
+            }
+            acct.collateral_history = trimmed;
+        }
+
+        // #336 — open a 72-hour window during which the importer may raise a dispute.
+        // Any existing dispute is cleared because the oracle has issued a new value.
+        acct.pre_dispute_required = old_required;
+        acct.dispute_expires_at = current_timestamp + 72 * 3600;
+        acct.dispute_raised = false;
+
         acct.required_collateral = adjusted_required;
         acct.collateral_last_updated = current_timestamp;
+        acct.oracle_last_updated = current_timestamp;
         save_account(&env, &importer, &acct);
-        env.storage().persistent().set(&has_updated_key, &true);
         if emergency {
             env.events().publish(
                 (Symbol::new(&env, "EmergencyOracleUpdate"), importer.clone()),
@@ -239,7 +298,10 @@ impl TariffShieldContract {
     pub fn auto_top_up(env: Env, importer: Address) -> i128 {
         let mut acct = load_account(&env, &importer);
         require_active(&env, &acct);
-        let shortfall = acct.required_collateral - acct.collateral_balance;
+        // #336 — during an active dispute use the pre-dispute value so auto-top-up
+        // does not force the importer to fund the disputed (higher) requirement.
+        let effective_required = effective_required(&acct);
+        let shortfall = effective_required - acct.collateral_balance;
         if shortfall <= 0 || acct.reserve_balance <= 0 {
             return 0;
         }
@@ -266,7 +328,10 @@ impl TariffShieldContract {
         let mut acct = load_account(&env, &importer);
         require_active(&env, &acct);
         require_fresh_collateral(&env, &importer, &acct);
-        let excess = acct.collateral_balance - acct.required_collateral;
+        // #336 — during an active dispute enforce the pre-dispute (lower) required value,
+        // letting the importer withdraw excess they would not be forced to lock under dispute.
+        let req = effective_required(&acct);
+        let excess = acct.collateral_balance - req;
         if amount > excess {
             panic_with_error!(&env, Error::CollateralBelowRequired);
         }
@@ -323,6 +388,55 @@ impl TariffShieldContract {
         env.events()
             .publish((symbol_short!("clawback"), importer.clone()), total);
         total
+    }
+
+    // #336 — importer formally contests the most recent oracle-set required_collateral.
+    // Must be called within the 72-hour dispute window opened by set_required_collateral.
+    // While dispute_raised is true, enforce uses pre_dispute_required instead of
+    // required_collateral, preventing the importer from being locked out while admin reviews.
+    pub fn raise_dispute(env: Env, importer: Address) {
+        importer.require_auth();
+        let mut acct = load_account(&env, &importer);
+        require_active(&env, &acct);
+        let current_ts = env.ledger().timestamp();
+        if acct.dispute_expires_at == 0 || current_ts >= acct.dispute_expires_at {
+            panic_with_error!(&env, Error::NoDisputeWindow);
+        }
+        if acct.dispute_raised {
+            panic_with_error!(&env, Error::DisputeAlreadyRaised);
+        }
+        acct.dispute_raised = true;
+        save_account(&env, &importer, &acct);
+        env.events().publish(
+            (symbol_short!("dispute"), importer.clone()),
+            (acct.pre_dispute_required, acct.required_collateral),
+        );
+    }
+
+    // #336 — platform admin resolves an open dispute.
+    // accept=true: the new oracle value stands; accept=false: revert to pre-dispute value.
+    pub fn resolve_dispute(env: Env, importer: Address, accept: bool) {
+        let admin = get_admin(&env);
+        admin.require_auth();
+        let mut acct = load_account(&env, &importer);
+        if !acct.dispute_raised {
+            panic_with_error!(&env, Error::NoActiveDispute);
+        }
+        if !accept {
+            acct.required_collateral = acct.pre_dispute_required;
+        }
+        acct.dispute_raised = false;
+        acct.dispute_expires_at = 0;
+        save_account(&env, &importer, &acct);
+        env.events().publish(
+            (symbol_short!("disprsol"), importer.clone()),
+            (accept, acct.required_collateral),
+        );
+    }
+
+    // #331 — return the rolling on-chain history of the last 12 required_collateral values.
+    pub fn get_collateral_history(env: Env, importer: Address) -> Vec<CollateralHistoryEntry> {
+        load_account(&env, &importer).collateral_history
     }
 
     pub fn propose_upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) -> u64 {
@@ -556,3 +670,13 @@ fn get_usdc_usd_rate(env: &Env, oracle: &Address) -> i128 {
     rate
 }
 
+// #336 — returns the required_collateral value currently in force for enforcement.
+// During an active dispute the pre-dispute (lower) value is used so the importer
+// is not locked out while admin review is pending.
+fn effective_required(acct: &Account) -> i128 {
+    if acct.dispute_raised {
+        acct.pre_dispute_required
+    } else {
+        acct.required_collateral
+    }
+}
