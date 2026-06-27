@@ -6,31 +6,94 @@ on:
   pull_request:
     branches: [main, master]
   schedule:
-    - cron: '0 8 * * 1'
+    - cron: "0 8 * * 1"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
 
 jobs:
   analyze:
-    name: analyze
+    name: Analyze JavaScript and TypeScript
     runs-on: ubuntu-latest
-    permissions:
-      security-events: write
-      actions: read
-      contents: read
-
-    strategy:
-      fail-fast: false
-      matrix:
-        language: [javascript-typescript]
+    timeout-minutes: 20
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
-          languages: ${{ matrix.language }}
+          languages: javascript-typescript
+          config-file: ./.github/codeql/codeql-config.yml
+
       - name: Autobuild
         uses: github/codeql-action/autobuild@v3
+
       - name: Perform CodeQL analysis
+        id: analyze
         uses: github/codeql-action/analyze@v3
         with:
-          category: /language:${{ matrix.language }}
+          category: "/language:javascript-typescript"
+          output: codeql-results
+
+      - name: Fail on blocking CodeQL findings
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+
+          const sarifDir = process.env.SARIF_DIR || 'codeql-results';
+          if (!fs.existsSync(sarifDir)) {
+            console.log(`No SARIF output directory found at ${sarifDir}; skipping severity gate.`);
+            process.exit(0);
+          }
+
+          const sarifFiles = fs.readdirSync(sarifDir)
+            .filter((file) => file.endsWith('.sarif'))
+            .map((file) => path.join(sarifDir, file));
+
+          let blocking = 0;
+          let warnings = 0;
+
+          for (const sarifFile of sarifFiles) {
+            const sarif = JSON.parse(fs.readFileSync(sarifFile, 'utf8'));
+            for (const run of sarif.runs || []) {
+              const rules = run.tool?.driver?.rules || [];
+              for (const result of run.results || []) {
+                const rule = Number.isInteger(result.ruleIndex)
+                  ? rules[result.ruleIndex]
+                  : rules.find((candidate) => candidate.id === result.ruleId);
+                const securitySeverity = Number(rule?.properties?.['security-severity'] || 0);
+                if (result.level === 'error' || securitySeverity >= 9) {
+                  blocking += 1;
+                } else if (result.level === 'warning') {
+                  warnings += 1;
+                }
+              }
+            }
+          }
+
+          console.log(`CodeQL warnings: ${warnings}`);
+          console.log(`CodeQL blocking findings: ${blocking}`);
+
+          if (blocking > 0) {
+            console.error('CodeQL found error-level or critical-severity results. Review the code scanning alerts before merging.');
+            process.exit(1);
+          }
+          NODE
+        env:
+          SARIF_DIR: ${{ steps.analyze.outputs.sarif-output }}
