@@ -1,0 +1,31 @@
+name: Vercel Preview
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  deploy:
+    name: deploy
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      deployments: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to Vercel preview
+        id: vercel
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          scope: ${{ secrets.VERCEL_ORG_ID }}
+          working-directory: ./apps/web
+          github-comment: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          VERCEL_ENV: preview
+          NEXT_PUBLIC_API_URL: ${{ vars.STAGING_API_URL }}

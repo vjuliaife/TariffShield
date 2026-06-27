@@ -2,6 +2,7 @@ import "./tracing.js";
 import "./instrument.js";
 import * as Sentry from "@sentry/node";
 import express, { type NextFunction, type Request, type Response } from "express";
+import { openApiSpec } from "./docs/openapi.js";
 import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
@@ -310,6 +311,42 @@ app.get("/metrics", metricsIpGuard, async (_req, res) => {
     res.status(500).end(err?.message || "Internal Metrics Error");
   }
 });
+
+// ── OpenAPI spec + Swagger UI (issue #286) ────────────────────────────────
+
+app.get("/docs/openapi.json", (_req, res) => {
+  res.json(openApiSpec);
+});
+
+app.get("/docs", (_req, res) => {
+  const specUrl = "/docs/openapi.json";
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>TariffShield API Docs</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />
+</head>
+<body>
+  <div id="swagger-ui"></div>
+  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script>
+    SwaggerUIBundle({
+      url: "${specUrl}",
+      dom_id: "#swagger-ui",
+      presets: [SwaggerUIBundle.presets.apis, SwaggerUIBundle.SwaggerUIStandalonePreset],
+      layout: "BaseLayout",
+      deepLinking: true,
+      tryItOutEnabled: true,
+    });
+  </script>
+</body>
+</html>`);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 app.use("/auth/signup", authLimiter);
 app.use("/auth/login", authLimiter);

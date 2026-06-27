@@ -13,7 +13,7 @@ A working end-to-end system on Stellar: one Soroban contract, a TypeScript SDK, 
 | Collateral token | Native XLM SAC `CDLZFC3SYJ…CYSC` (stand-in for USDC; mainnet would use Circle USDC)                                                                                     |
 | License          | MIT                                                                                                                                                                     |
 
-See [PITCH.md](./PITCH.md) for the market case, [ARCHITECTURE.md](./ARCHITECTURE.md) for the technical deep-dive.
+See [PITCH.md](./PITCH.md) for the market case, [ARCHITECTURE.md](./ARCHITECTURE.md) for the technical deep-dive, and [docs/OPERATIONS_RUNBOOK.md](./docs/OPERATIONS_RUNBOOK.md) for the surety admin emergency clawback procedure.
 
 ---
 
@@ -186,6 +186,23 @@ Running into a setup or runtime error? Check **[docs/FAQ.md](./docs/FAQ.md)** fo
 - `NEXT_PUBLIC_*` vars not visible in the browser
 - JWT token expired during development
 - `docker-compose` port conflict on 5432
+
+## API Documentation
+
+The REST API ships with an OpenAPI 3.1 specification and an interactive Swagger UI:
+
+| Endpoint | Description |
+|---|---|
+| `GET /docs` | Swagger UI (rendered in browser) |
+| `GET /docs/openapi.json` | Raw OpenAPI 3.1 spec (JSON) |
+
+Start the API (`npm run dev:api`) then open [http://localhost:3002/docs](http://localhost:3002/docs).
+
+The spec covers all 30+ routes across Auth, Importers, KYC, Compliance, Surety License, and Health, with request/response schemas and JWT security requirements on each protected route.
+
+## Changelog
+
+See [CHANGELOG.md](./CHANGELOG.md) for a full history of releases following the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
 ## License
 
