@@ -15,6 +15,14 @@ export const oracleKeypair = env.ORACLE_STELLAR_SECRET
   ? Keypair.fromSecret(env.ORACLE_STELLAR_SECRET)
   : platformKeypair;
 
+/** Collect all configured admin keypairs for multi-signer oracle updates. */
+export function getOracleSignerKeypairs(count: number): Keypair[] {
+  const kps: Keypair[] = [platformKeypair];
+  if (count >= 2 && env.ADMIN_2_SECRET) kps.push(Keypair.fromSecret(env.ADMIN_2_SECRET));
+  if (count >= 3 && env.ADMIN_3_SECRET) kps.push(Keypair.fromSecret(env.ADMIN_3_SECRET));
+  return kps;
+}
+
 export const sorobanRpcCallsTotal = new client.Counter({
   name: "soroban_rpc_calls_total",
   help: "Total number of Soroban RPC calls made",
@@ -116,12 +124,19 @@ export async function pingRpc(): Promise<void> {
 }
 
 /**
- * Retrieves the current balance for a bond directly from the Soroban contract.
- * @param bondId The unique identifier for the bond.
- * @returns The on-chain balance as a string.
+ * Retrieves the current collateral balance for a bond directly from the Soroban contract.
+ * @param stellarAddress The importer's Stellar address.
+ * @returns The on-chain collateral balance as a string.
  */
-export async function getBondOnChain(bondId: string): Promise<string> {
-  // Use the contractClient proxy which already has metric instrumentation
-  const bond = await contractClient.get_bond({ id: bondId });
-  return bond.balance.toString();
+export async function getBondOnChain(stellarAddress: string): Promise<string> {
+  const acct = await contractClient.getAccount(stellarAddress);
+  return acct.collateralBalance.toString();
+}
+
+/**
+ * Retrieves the required_collateral for an importer address from the contract.
+ */
+export async function getRequiredCollateralOnChain(stellarAddress: string): Promise<string> {
+  const acct = await contractClient.getAccount(stellarAddress);
+  return acct.requiredCollateral.toString();
 }

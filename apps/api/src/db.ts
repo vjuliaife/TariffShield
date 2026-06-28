@@ -457,13 +457,14 @@ export async function ping(): Promise<void> {
 /**
  * Returns all bonds that have been registered on-chain.
  */
-export async function getActiveBonds(): Promise<{ bondId: string; dbBalance: string }[]> {
+export async function getActiveBonds(): Promise<{ bondId: string; dbBalance: string; stellarAddress: string }[]> {
   const result = await pool.query(
-    "SELECT bond_id, collateral_balance FROM importers WHERE registered_on_chain_tx IS NOT NULL"
+    "SELECT bond_id, collateral_balance, stellar_address FROM importers WHERE registered_on_chain_tx IS NOT NULL"
   );
   return result.rows.map((row) => ({
     bondId: row.bond_id,
     dbBalance: row.collateral_balance,
+    stellarAddress: row.stellar_address,
   }));
 }
 

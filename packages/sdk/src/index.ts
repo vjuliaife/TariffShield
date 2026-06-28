@@ -119,7 +119,7 @@ export class TariffShieldClient {
   }
 
   async setRequiredCollateral(
-    signer: Keypair,
+    signers: Keypair[],
     importer: string,
     newRequired: bigint,
     priceOracleContract?: string,
@@ -252,6 +252,45 @@ export class TariffShieldClient {
       throw new Error(`simulate ${method} returned no value`);
     }
     return sim.result.retval;
+  }
+
+  private async invokeAndSubmitMulti<T>(
+    signers: Keypair[],
+    method: string,
+    args: xdr.ScVal[],
+    primary: Keypair,
+  ): Promise<InvokeResult<T>> {
+    const account = await this.server.getAccount(primary.publicKey());
+    const tx = new TransactionBuilder(account, {
+      fee: DEFAULT_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(this.contract.call(method, ...args))
+      .setTimeout(this.txTimeoutSeconds)
+      .build();
+
+    const prepared = await this.server.prepareTransaction(tx);
+    for (const signer of signers) {
+      prepared.sign(signer);
+    }
+    const sendResponse = await this.server.sendTransaction(prepared);
+    if (sendResponse.status === "ERROR") {
+      throw new Error(`send failed: ${JSON.stringify(sendResponse.errorResult)}`);
+    }
+    const txHash = sendResponse.hash;
+
+    let txResult = await this.server.getTransaction(txHash);
+    const deadline = Date.now() + 60_000;
+    while (txResult.status === "NOT_FOUND" && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 1500));
+      txResult = await this.server.getTransaction(txHash);
+    }
+    if (txResult.status !== "SUCCESS") {
+      throw new Error(`tx ${txHash} status=${txResult.status}`);
+    }
+    const retval = txResult.returnValue;
+    const parsed = (retval ? scValToNative(retval) : null) as T;
+    return { txHash, result: parsed };
   }
 
   private async invokeAndSubmit<T>(

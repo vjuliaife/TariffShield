@@ -99,6 +99,8 @@ impl TariffShieldContract {
         env.storage().instance().set(&DataKey::Token, &token);
         env.storage().instance().set(&DataKey::OracleAdmin, &oracle_admin);
         env.storage().instance().set(&DataKey::ProposalCounter, &0u64);
+        env.storage().instance().set(&DataKey::OracleSigners, &oracle_signers);
+        env.storage().instance().set(&DataKey::OracleThreshold, &2u32);
     }
 
     pub fn register_importer(env: Env, importer: Address, bond_id: u64, required_collateral: i128) {
@@ -269,6 +271,40 @@ impl TariffShieldContract {
             (symbol_short!("required"), importer.clone()),
             (old_required, adjusted_required),
         );
+    }
+
+    /// Rotate the oracle signer set — requires 2-of-3 from the current signer set.
+    pub fn update_oracle_signers(env: Env, new_signers: Vec<Address>, approvals: Vec<Address>) {
+        if new_signers.len() != 3 {
+            panic_with_error!(&env, Error::InvalidSignatureSet);
+        }
+        let oracle_signers: Vec<Address> = env.storage().instance()
+            .get(&DataKey::OracleSigners)
+            .unwrap_or_else(|| panic_with_error!(&env, Error::NotInitialized));
+        let threshold: u32 = env.storage().instance().get(&DataKey::OracleThreshold).unwrap_or(2u32);
+
+        let mut seen = Vec::new(&env);
+        let mut valid_count: u32 = 0;
+        for signer in approvals.iter() {
+            if seen.contains(signer.clone()) {
+                panic_with_error!(&env, Error::InvalidSignatureSet);
+            }
+            seen.push_back(signer.clone());
+            if oracle_signers.contains(signer.clone()) {
+                signer.require_auth();
+                valid_count += 1;
+            }
+        }
+        if valid_count < threshold {
+            panic_with_error!(&env, Error::InsufficientSignatures);
+        }
+        env.storage().instance().set(&DataKey::OracleSigners, &new_signers);
+    }
+
+    pub fn get_oracle_signers(env: Env) -> Vec<Address> {
+        env.storage().instance()
+            .get(&DataKey::OracleSigners)
+            .unwrap_or_else(|| panic_with_error!(&env, Error::NotInitialized))
     }
 
     pub fn auto_top_up(env: Env, importer: Address) -> i128 {
