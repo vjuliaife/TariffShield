@@ -361,6 +361,61 @@ export async function migrate(): Promise<void> {
     );
 
     CREATE INDEX IF NOT EXISTS idx_compliance_reports_surety ON compliance_reports(surety_id, report_month DESC);
+
+    -- #324: insurance license verification for surety_admin accounts
+    -- A surety_admin is created with status='pending'; operational routes are blocked
+    -- until a platform admin sets status='verified' after checking NAIC / state DOI records.
+    CREATE TABLE IF NOT EXISTS surety_license_verifications (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      user_id UUID NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+      naic_number TEXT,
+      company_name TEXT NOT NULL DEFAULT '',
+      state_of_domicile TEXT NOT NULL DEFAULT '',
+      am_best_rating TEXT,
+      license_status_detail TEXT,
+      status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'submitted', 'verified', 'rejected')),
+      submitted_at TIMESTAMPTZ,
+      reviewed_at TIMESTAMPTZ,
+      reviewer_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      rejection_reason TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_surety_license_verifications_status
+      ON surety_license_verifications(status, created_at DESC);
+
+    -- #336: off-chain tracking of on-chain collateral disputes
+    CREATE TABLE IF NOT EXISTS collateral_disputes (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      importer_id UUID NOT NULL REFERENCES importers(id) ON DELETE CASCADE,
+      old_required NUMERIC(20, 0) NOT NULL,
+      new_required NUMERIC(20, 0) NOT NULL,
+      raise_tx_hash TEXT,
+      status TEXT NOT NULL DEFAULT 'open'
+        CHECK (status IN ('open', 'resolved_accepted', 'resolved_rejected')),
+      raised_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      resolved_at TIMESTAMPTZ,
+      resolve_tx_hash TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_collateral_disputes_importer
+      ON collateral_disputes(importer_id, raised_at DESC);
+
+    -- #306 SOC 2 CC6: server-side session table for 15-min inactivity timeout and
+    -- concurrent session limits. Sessions are created on login and revoked on logout.
+    CREATE TABLE IF NOT EXISTS user_sessions (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      last_activity TIMESTAMPTZ NOT NULL DEFAULT now(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      revoked_at TIMESTAMPTZ,
+      ip_address TEXT,
+      user_agent TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id
+      ON user_sessions(user_id) WHERE revoked_at IS NULL;
   `,
     undefined,
     "migrate_schema",
@@ -477,4 +532,94 @@ export async function createDataErasureRequest(
     "insert_erasure_request",
   );
   return result.rows[0]?.id ?? "";
+}
+
+// ── SOC 2 CC6 — Session management (#306) ────────────────────────────────────
+
+const SESSION_INACTIVITY_MINUTES = 15;
+
+export async function createSession(
+  userId: string,
+  ipAddress?: string,
+  userAgent?: string,
+): Promise<string> {
+  const result = await timedQuery<{ id: string }>(
+    `INSERT INTO user_sessions (user_id, ip_address, user_agent)
+     VALUES ($1, $2, $3) RETURNING id`,
+    [userId, ipAddress ?? null, userAgent ?? null],
+    "insert_user_session",
+  );
+  return result.rows[0]!.id;
+}
+
+export async function validateSession(sessionId: string): Promise<boolean> {
+  const result = await timedQuery<{ id: string }>(
+    `SELECT id FROM user_sessions
+     WHERE id = $1
+       AND revoked_at IS NULL
+       AND last_activity > now() - INTERVAL '${SESSION_INACTIVITY_MINUTES} minutes'`,
+    [sessionId],
+    "validate_user_session",
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+export function touchSession(sessionId: string): void {
+  timedQuery(
+    "UPDATE user_sessions SET last_activity = now() WHERE id = $1 AND revoked_at IS NULL",
+    [sessionId],
+    "touch_user_session",
+  ).catch(() => {});
+}
+
+export async function revokeSession(sessionId: string): Promise<void> {
+  await timedQuery(
+    "UPDATE user_sessions SET revoked_at = now() WHERE id = $1",
+    [sessionId],
+    "revoke_user_session",
+  );
+}
+
+export async function getActiveSessionCount(userId: string): Promise<number> {
+  const result = await timedQuery<{ count: string }>(
+    `SELECT COUNT(*) AS count FROM user_sessions
+     WHERE user_id = $1 AND revoked_at IS NULL
+       AND last_activity > now() - INTERVAL '${SESSION_INACTIVITY_MINUTES} minutes'`,
+    [userId],
+    "count_active_sessions",
+  );
+  return parseInt(result.rows[0]?.count ?? "0", 10);
+}
+
+export async function revokeOldestSession(userId: string): Promise<void> {
+  await timedQuery(
+    `UPDATE user_sessions SET revoked_at = now()
+     WHERE id = (
+       SELECT id FROM user_sessions
+       WHERE user_id = $1 AND revoked_at IS NULL
+       ORDER BY last_activity ASC
+       LIMIT 1
+     )`,
+    [userId],
+    "revoke_oldest_session",
+  );
+}
+
+export async function getStaleAccounts(
+  days: number,
+): Promise<Array<{ id: string; email: string; last_login: string | null }>> {
+  const result = await timedQuery<{ id: string; email: string; last_login: string | null }>(
+    `SELECT u.id, u.email,
+            MAX(a.attempted_at) AS last_login
+       FROM users u
+       LEFT JOIN authentication_attempts a
+         ON a.user_id = u.id AND a.success = TRUE
+      GROUP BY u.id, u.email
+     HAVING MAX(a.attempted_at) IS NULL
+         OR MAX(a.attempted_at) < now() - ($1::integer * INTERVAL '1 day')
+      ORDER BY last_login ASC NULLS FIRST`,
+    [days],
+    "select_stale_accounts",
+  );
+  return result.rows;
 }

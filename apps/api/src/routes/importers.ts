@@ -4,6 +4,7 @@ import { Keypair } from "@stellar/stellar-sdk";
 import { z } from "zod";
 import { pool } from "../db.js";
 import { authMiddleware, privacyReacceptanceGate, type AuthedRequest } from "../auth.js";
+import { requireLicenseVerified } from "./surety-license.js";
 import { contractClient, explorerTx, platformKeypair, suretyKeypair } from "../stellar.js";
 import { lookupCbpDutyRate } from "../services/cbp-duty-lookup.js";
 import { screenImporterEntity, screenWalletAddress } from "../services/aml-screening.js";
@@ -423,7 +424,7 @@ importersRouter.post("/:id/withdraw", async (req: Request, res: Response) => {
 
 const YieldSchema = z.object({ amountStroops: z.string().regex(/^\d+$/) });
 
-importersRouter.post("/:id/accrue-yield", async (req: Request, res: Response) => {
+importersRouter.post("/:id/accrue-yield", requireLicenseVerified, async (req: Request, res: Response) => {
   const user = (req as AuthedRequest).user;
   if (user.role !== "surety_admin") {
     res.status(403).json({ error: "surety admin only" });
@@ -451,7 +452,7 @@ importersRouter.post("/:id/accrue-yield", async (req: Request, res: Response) =>
   res.json({ txHash: onChain.txHash, txUrl: explorerTx(onChain.txHash) });
 });
 
-importersRouter.post("/:id/clawback", async (req: Request, res: Response) => {
+importersRouter.post("/:id/clawback", requireLicenseVerified, async (req: Request, res: Response) => {
   const user = (req as AuthedRequest).user;
   if (user.role !== "surety_admin") {
     res.status(403).json({ error: "surety admin only" });

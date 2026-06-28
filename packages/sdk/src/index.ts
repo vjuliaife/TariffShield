@@ -18,6 +18,18 @@ export interface TariffShieldAccount {
   yieldAccrued: bigint;
   isClawbacked: boolean;
   collateralLastUpdated: bigint;
+  // #336 — dispute window fields
+  disputeExpiresAt: bigint;
+  preDisputeRequired: bigint;
+  disputeRaised: boolean;
+  // #326 / #331 — oracle update tracking
+  oracleLastUpdated: bigint;
+}
+
+// #331 — one entry in the on-chain collateral audit trail
+export interface CollateralHistoryEntry {
+  value: bigint;
+  timestamp: bigint;
 }
 
 export interface InvokeResult<T> {
@@ -157,6 +169,21 @@ export class TariffShieldClient {
     return this.invokeAndSubmit(signer, "clawback", [addressToScVal(importer)]);
   }
 
+  // #336 — importer formally disputes the most recent oracle-set required_collateral.
+  // Must be called within the 72-hour window opened by set_required_collateral.
+  async raiseDispute(signer: Keypair, importer: string): Promise<InvokeResult<null>> {
+    return this.invokeAndSubmit(signer, "raise_dispute", [addressToScVal(importer)]);
+  }
+
+  // #336 — platform admin resolves an open dispute.
+  // accept=true keeps the new oracle value; accept=false reverts to pre-dispute value.
+  async resolveDispute(signer: Keypair, importer: string, accept: boolean): Promise<InvokeResult<null>> {
+    return this.invokeAndSubmit(signer, "resolve_dispute", [
+      addressToScVal(importer),
+      nativeToScVal(accept, { type: "bool" }),
+    ]);
+  }
+
   // ----- Read methods (simulate only) -----
 
   async getAccount(importer: string): Promise<TariffShieldAccount> {
@@ -170,7 +197,21 @@ export class TariffShieldClient {
       yieldAccrued: BigInt(obj.yield_accrued as string),
       isClawbacked: Boolean(obj.is_clawbacked),
       collateralLastUpdated: BigInt(obj.collateral_last_updated as string | number),
+      disputeExpiresAt: BigInt((obj.dispute_expires_at as string | number) ?? 0),
+      preDisputeRequired: BigInt((obj.pre_dispute_required as string) ?? 0),
+      disputeRaised: Boolean(obj.dispute_raised),
+      oracleLastUpdated: BigInt((obj.oracle_last_updated as string | number) ?? 0),
     };
+  }
+
+  // #331 — return the rolling on-chain audit trail of required_collateral changes.
+  async getCollateralHistory(importer: string): Promise<CollateralHistoryEntry[]> {
+    const raw = await this.simulate("get_collateral_history", [addressToScVal(importer)]);
+    const arr = scValToNative(raw) as Array<Record<string, unknown>>;
+    return arr.map((entry) => ({
+      value: BigInt((entry.value as string | number) ?? 0),
+      timestamp: BigInt((entry.timestamp as string | number) ?? 0),
+    }));
   }
 
   async getAdmin(): Promise<string> {

@@ -20,4 +20,12 @@ pub enum Error {
     OracleCallFailed = 14,
     // #339 — oracle role is separate from general admin; caller used wrong role
     UnauthorizedRole = 15,
+    // #326 — new required_collateral would exceed 5× the previous value in one update
+    CollateralCapExceeded = 16,
+    // #336 — importer tried to raise a dispute outside the 72-hour window
+    NoDisputeWindow = 17,
+    // #336 — dispute already raised for this importer's current update
+    DisputeAlreadyRaised = 18,
+    // #336 — admin tried to resolve a dispute that was never raised
+    NoActiveDispute = 19,
 }

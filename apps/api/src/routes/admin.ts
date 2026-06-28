@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
-import { pool } from "../db.js";
+import { pool, getStaleAccounts } from "../db.js";
 import { authMiddleware, requireRole, privacyReacceptanceGate, type AuthedRequest } from "../auth.js";
 import { platformKeypair, oracleKeypair } from "../stellar.js";
 
@@ -101,5 +101,21 @@ adminRouter.post(
     }
 
     res.status(201).json({ version: result.rows[0] });
+  },
+);
+
+// SOC 2 CC6.2: quarterly access review — surfaces accounts with no successful login
+// in the past N days (default 90). Intended for use by the platform security team.
+adminRouter.get(
+  "/access-review",
+  requireRole("surety_admin"),
+  async (req: Request, res: Response) => {
+    const days = Math.max(1, parseInt(req.query.days as string) || 90);
+    const accounts = await getStaleAccounts(days);
+    res.json({
+      staleDays: days,
+      count: accounts.length,
+      accounts,
+    });
   },
 );

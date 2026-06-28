@@ -1,0 +1,524 @@
+{
+  "info": {
+    "_postman_id": "f1e2d3c4-b5a6-7890-abcd-ef1234567890",
+    "name": "TariffShield API",
+    "description": "## TariffShield API\n\nSoroban-backed customs-bond collateral rail for US importers.\n\n### How to import\n\n1. In Postman, click **Import** and select this file.\n2. Import the companion `tariff-shield.postman_environment.json` under **Environments**.\n3. Select the **TariffShield** environment from the environment picker.\n4. Fill in `importer_email` / `importer_password` (or `admin_email` / `admin_password`) with real credentials.\n\n### Auto-authentication\n\nThe collection pre-request script automatically calls `POST /auth/login` on the first request and stores the returned JWT in the `jwt_token` collection variable. Subsequent requests reuse that token. To force a fresh login, clear the `jwt_token` collection variable.\n\n### Running the full importer flow\n\n1. **Auth › Sign Up** — create a new importer account.\n2. **Auth › Login** — obtain a JWT (auto-done by pre-request script on other requests).\n3. **Importers › Create Importer** — register the importer on-chain and receive `importer_id`; copy it into the environment.\n4. **Importers › Upload Tariff CSV** — submit HTS line items to compute required collateral.\n5. **Importers › Deposit Collateral** — fund the importer's collateral bucket.\n6. **Importers › Get Importer** — verify on-chain balance matches expected collateral.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{jwt_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "var token = pm.collectionVariables.get('jwt_token');",
+          "if (!token) {",
+          "  var baseUrl = pm.environment.get('base_url');",
+          "  var email = pm.environment.get('importer_email');",
+          "  var password = pm.environment.get('importer_password');",
+          "  pm.sendRequest({",
+          "    url: baseUrl + '/auth/login',",
+          "    method: 'POST',",
+          "    header: [{ key: 'Content-Type', value: 'application/json' }],",
+          "    body: {",
+          "      mode: 'raw',",
+          "      raw: JSON.stringify({ email: email, password: password })",
+          "    }",
+          "  }, function(err, res) {",
+          "    if (!err && res.code === 200) {",
+          "      pm.collectionVariables.set('jwt_token', res.json().token);",
+          "    }",
+          "  });",
+          "}"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "jwt_token",
+      "value": "",
+      "type": "string",
+      "description": "JWT bearer token — auto-populated by the collection pre-request script on first request. Clear this variable to force re-authentication."
+    }
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Sign Up",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/signup",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "signup"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"importer@example.com\",\n  \"password\": \"Password123!\",\n  \"role\": \"importer\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Register a new user account. `role` defaults to `importer`; use `surety_admin` for surety company accounts (requires license verification before operational routes are available)."
+          },
+          "response": [
+            {
+              "name": "201 Created",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": { "raw": "{{base_url}}/auth/signup", "host": ["{{base_url}}"], "path": ["auth", "signup"] },
+                "body": { "mode": "raw", "raw": "{\"email\":\"importer@example.com\",\"password\":\"Password123!\",\"role\":\"importer\"}", "options": { "raw": { "language": "json" } } }
+              },
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "cookie": [],
+              "status": "Created",
+              "code": 201,
+              "body": "{\"token\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjU1YTViNWIzLTdmMDgtNDY5My1hNTc0LThjMzdhMGM5MjQ3MiIsImVtYWlsIjoiaW1wb3J0ZXJAZXhhbXBsZS5jb20iLCJyb2xlIjoiaW1wb3J0ZXIiLCJpYXQiOjE3NTEwMDAwMDB9.example_signature\",\"user\":{\"id\":\"55a5b5b3-7f08-4693-a574-8c37a0c92472\",\"email\":\"importer@example.com\",\"role\":\"importer\"}}"
+            }
+          ]
+        },
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('Response contains token', function () {",
+                  "  var jsonData = pm.response.json();",
+                  "  pm.expect(jsonData).to.have.property('token');",
+                  "  pm.collectionVariables.set('jwt_token', jsonData.token);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/login",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "login"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{importer_email}}\",\n  \"password\": \"{{importer_password}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Authenticate with email and password. Returns a JWT bearer token. The test script validates the response and stores the token in the `jwt_token` collection variable.\n\nUse `admin_email` / `admin_password` environment variables to authenticate as a surety admin."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": { "raw": "{{base_url}}/auth/login", "host": ["{{base_url}}"], "path": ["auth", "login"] },
+                "body": { "mode": "raw", "raw": "{\"email\":\"importer@tariffshield.example\",\"password\":\"Password123!\"}", "options": { "raw": { "language": "json" } } }
+              },
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "cookie": [],
+              "status": "OK",
+              "code": 200,
+              "body": "{\"token\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjU1YTViNWIzLTdmMDgtNDY5My1hNTc0LThjMzdhMGM5MjQ3MiIsImVtYWlsIjoiaW1wb3J0ZXJAdGFyaWZmc2hpZWxkLmV4YW1wbGUiLCJyb2xlIjoiaW1wb3J0ZXIiLCJpYXQiOjE3NTEwMDAwMDB9.example_signature\",\"user\":{\"id\":\"55a5b5b3-7f08-4693-a574-8c37a0c92472\",\"email\":\"importer@tariffshield.example\",\"role\":\"importer\"}}"
+            }
+          ]
+        },
+        {
+          "name": "Get Current User",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/auth/me",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "me"]
+            },
+            "description": "Returns the authenticated user's profile. Requires a valid JWT in the `Authorization: Bearer` header (inherited from collection auth)."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": { "raw": "{{base_url}}/auth/me", "host": ["{{base_url}}"], "path": ["auth", "me"] }
+              },
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "cookie": [],
+              "status": "OK",
+              "code": 200,
+              "body": "{\"user\":{\"id\":\"55a5b5b3-7f08-4693-a574-8c37a0c92472\",\"email\":\"importer@tariffshield.example\",\"role\":\"importer\"}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Importers",
+      "item": [
+        {
+          "name": "Create Importer",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/importers",
+              "host": ["{{base_url}}"],
+              "path": ["importers"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"legalName\": \"Acme Imports LLC\",\n  \"ein\": \"12-3456789\",\n  \"bondId\": 1001,\n  \"initialRequiredCollateral\": \"5000000000\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Register a new importer. Creates a Stellar keypair, runs OFAC + AML screening, validates the CBP Bond Form 301, and registers the importer on-chain via the Soroban contract.\n\n- `bondId`: CBP-assigned bond identifier (integer)\n- `initialRequiredCollateral`: collateral in stroops (1 XLM = 10,000,000 stroops)\n- `ein`: optional Employer Identification Number for bond validation\n\nReturns the importer record including the Stellar address and a one-time view of the Stellar secret key. **Store the `stellarSecret` securely** — it is not stored in plaintext after this response."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": { "raw": "{{base_url}}/importers", "host": ["{{base_url}}"], "path": ["importers"] },
+                "body": { "mode": "raw", "raw": "{\"legalName\":\"Acme Imports LLC\",\"ein\":\"12-3456789\",\"bondId\":1001,\"initialRequiredCollateral\":\"5000000000\"}", "options": { "raw": { "language": "json" } } }
+              },
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "cookie": [],
+              "status": "OK",
+              "code": 200,
+              "body": "{\"importer\":{\"id\":\"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\"legalName\":\"Acme Imports LLC\",\"ein\":\"12-3456789\",\"bondId\":1001,\"stellarAddress\":\"GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGZMT3Y9BGL3BVUOSJKXE\",\"stellarSecret\":\"SCZANGBA5LLHM3OHSPEDH7CRQNXHF2TMMGPNC4ZTJLEQZLHKJL7DFNO\",\"registeredOnChainTx\":\"a3d2b1c4e5f6789012345678901234567890abcdef1234567890abcdef123456\",\"stellarTxUrl\":\"https://stellar.expert/explorer/testnet/tx/a3d2b1c4e5f6789012345678901234567890abcdef1234567890abcdef123456\",\"createdAt\":\"2026-06-27T00:00:00.000Z\"}}"
+            }
+          ]
+        },
+        {
+          "name": "List Importers",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/importers",
+              "host": ["{{base_url}}"],
+              "path": ["importers"]
+            },
+            "description": "Returns all importers visible to the authenticated user.\n\n- **importer role**: returns only the caller's own importer record.\n- **surety_admin role**: returns all registered importers."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": { "raw": "{{base_url}}/importers", "host": ["{{base_url}}"], "path": ["importers"] }
+              },
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "cookie": [],
+              "status": "OK",
+              "code": 200,
+              "body": "{\"importers\":[{\"id\":\"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\"legal_name\":\"Acme Imports LLC\",\"bond_id\":1001,\"stellar_address\":\"GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGZMT3Y9BGL3BVUOSJKXE\",\"created_at\":\"2026-06-27T00:00:00.000Z\"}]}"
+            }
+          ]
+        },
+        {
+          "name": "Get Importer",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/importers/{{importer_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["importers", "{{importer_id}}"]
+            },
+            "description": "Returns the full importer record, live on-chain account state from the Soroban contract, and the last 50 contract events."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": { "raw": "{{base_url}}/importers/{{importer_id}}", "host": ["{{base_url}}"], "path": ["importers", "{{importer_id}}"] }
+              },
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "cookie": [],
+              "status": "OK",
+              "code": 200,
+              "body": "{\"importer\":{\"id\":\"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\"legalName\":\"Acme Imports LLC\",\"ein\":\"12-3456789\",\"bondId\":1001,\"stellarAddress\":\"GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGZMT3Y9BGL3BVUOSJKXE\",\"registeredOnChainTx\":\"a3d2b1c4e5f6789012345678901234567890abcdef1234567890abcdef123456\",\"createdAt\":\"2026-06-27T00:00:00.000Z\"},\"onChainAccount\":{\"bondId\":\"1001\",\"collateralBalance\":\"5000000000\",\"requiredCollateral\":\"5000000000\",\"reserveBalance\":\"1000000000\",\"yieldAccrued\":\"0\",\"isClawbacked\":false},\"events\":[]}"
+            }
+          ]
+        },
+        {
+          "name": "Get Collateral Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/importers/{{importer_id}}/collateral-status",
+              "host": ["{{base_url}}"],
+              "path": ["importers", "{{importer_id}}", "collateral-status"]
+            },
+            "description": "Returns whether the on-chain collateral record is stale. Collateral data expires after 365 days; a stale record must be refreshed via a new tariff upload before CBP submission."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": { "raw": "{{base_url}}/importers/{{importer_id}}/collateral-status", "host": ["{{base_url}}"], "path": ["importers", "{{importer_id}}", "collateral-status"] }
+              },
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "cookie": [],
+              "status": "OK",
+              "code": 200,
+              "body": "{\"stale\":false,\"lastUpdated\":\"2026-06-27T00:00:00.000Z\",\"expiresAt\":\"2027-06-27T00:00:00.000Z\"}"
+            }
+          ]
+        },
+        {
+          "name": "Upload Tariff CSV",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/importers/{{importer_id}}/upload-tariff-csv",
+              "host": ["{{base_url}}"],
+              "path": ["importers", "{{importer_id}}", "upload-tariff-csv"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"filename\": \"q1-2026-tariffs.csv\",\n  \"lineItems\": [\n    {\n      \"htsCode\": \"8471.30.01\",\n      \"value\": 50000,\n      \"dutyRate\": 0.035\n    },\n    {\n      \"htsCode\": \"6110.20.10\",\n      \"value\": 20000,\n      \"dutyRate\": 0.12\n    }\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Submit HTS code line items to recompute the importer's required collateral on-chain. Each line item is validated against live CBP duty rates (>10% deviation blocks the request in strict mode). Rate-limited to one update per 24 hours per importer.\n\n- `htsCode`: Harmonized Tariff Schedule code\n- `value`: declared import value in USD\n- `dutyRate`: reported duty rate as a decimal (0.035 = 3.5%)"
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": { "raw": "{{base_url}}/importers/{{importer_id}}/upload-tariff-csv", "host": ["{{base_url}}"], "path": ["importers", "{{importer_id}}", "upload-tariff-csv"] },
+                "body": { "mode": "raw", "raw": "{\"filename\":\"q1-2026-tariffs.csv\",\"lineItems\":[{\"htsCode\":\"8471.30.01\",\"value\":50000,\"dutyRate\":0.035}]}", "options": { "raw": { "language": "json" } } }
+              },
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "cookie": [],
+              "status": "OK",
+              "code": 200,
+              "body": "{\"annualDutyTotal\":1750,\"bondFaceValue\":175,\"requiredCollateralStroops\":\"875000000\",\"txHash\":\"b4c5d6e7f890123456789012345678901234567890abcdef1234567890abcdef\",\"txUrl\":\"https://stellar.expert/explorer/testnet/tx/b4c5d6e7f890123456789012345678901234567890abcdef1234567890abcdef\"}"
+            }
+          ]
+        },
+        {
+          "name": "Deposit Collateral",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/importers/{{importer_id}}/deposit",
+              "host": ["{{base_url}}"],
+              "path": ["importers", "{{importer_id}}", "deposit"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amountStroops\": \"10000000000\",\n  \"bucket\": \"collateral\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Deposit funds into the importer's collateral or reserve bucket on-chain. Requires KYC approval before collateral deposits are accepted.\n\n- `amountStroops`: amount in stroops (1 XLM = 10,000,000 stroops)\n- `bucket`: `collateral` (counts toward bond coverage) or `reserve` (source for auto top-up)"
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": { "raw": "{{base_url}}/importers/{{importer_id}}/deposit", "host": ["{{base_url}}"], "path": ["importers", "{{importer_id}}", "deposit"] },
+                "body": { "mode": "raw", "raw": "{\"amountStroops\":\"10000000000\",\"bucket\":\"collateral\"}", "options": { "raw": { "language": "json" } } }
+              },
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "cookie": [],
+              "status": "OK",
+              "code": 200,
+              "body": "{\"txHash\":\"c5d6e7f8901234567890123456789012345678901234567890abcdef12345678\",\"txUrl\":\"https://stellar.expert/explorer/testnet/tx/c5d6e7f8901234567890123456789012345678901234567890abcdef12345678\"}"
+            }
+          ]
+        },
+        {
+          "name": "Auto Top-Up",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/importers/{{importer_id}}/auto-top-up",
+              "host": ["{{base_url}}"],
+              "path": ["importers", "{{importer_id}}", "auto-top-up"]
+            },
+            "description": "Manually trigger the auto top-up job for the importer. Moves reserve funds into the collateral bucket if `collateralBalance < requiredCollateral`. Normally invoked automatically by a background job; this endpoint is for manual intervention or testing."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "url": { "raw": "{{base_url}}/importers/{{importer_id}}/auto-top-up", "host": ["{{base_url}}"], "path": ["importers", "{{importer_id}}", "auto-top-up"] }
+              },
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "cookie": [],
+              "status": "OK",
+              "code": 200,
+              "body": "{\"movedStroops\":\"500000000\",\"txHash\":\"d6e7f890123456789012345678901234567890123456789012345678901234ab\",\"txUrl\":\"https://stellar.expert/explorer/testnet/tx/d6e7f890123456789012345678901234567890123456789012345678901234ab\"}"
+            }
+          ]
+        },
+        {
+          "name": "Withdraw Collateral",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/importers/{{importer_id}}/withdraw",
+              "host": ["{{base_url}}"],
+              "path": ["importers", "{{importer_id}}", "withdraw"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amountStroops\": \"1000000000\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Withdraw excess collateral. The contract enforces that `collateralBalance - amountStroops >= requiredCollateral` after withdrawal; requests that would drop below the required level are rejected on-chain."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": { "raw": "{{base_url}}/importers/{{importer_id}}/withdraw", "host": ["{{base_url}}"], "path": ["importers", "{{importer_id}}", "withdraw"] },
+                "body": { "mode": "raw", "raw": "{\"amountStroops\":\"1000000000\"}", "options": { "raw": { "language": "json" } } }
+              },
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "cookie": [],
+              "status": "OK",
+              "code": 200,
+              "body": "{\"txHash\":\"e7f8901234567890123456789012345678901234567890123456789012345abc\",\"txUrl\":\"https://stellar.expert/explorer/testnet/tx/e7f8901234567890123456789012345678901234567890123456789012345abc\"}"
+            }
+          ]
+        },
+        {
+          "name": "Accrue Yield (Surety Admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/importers/{{importer_id}}/accrue-yield",
+              "host": ["{{base_url}}"],
+              "path": ["importers", "{{importer_id}}", "accrue-yield"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amountStroops\": \"500000000\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Accrue simulated BENJI yield into the importer's account. **Surety admin role required.** The caller must have a verified surety license (`requireLicenseVerified` middleware). Set `admin_email` / `admin_password` in the environment to authenticate as a surety admin."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": { "raw": "{{base_url}}/importers/{{importer_id}}/accrue-yield", "host": ["{{base_url}}"], "path": ["importers", "{{importer_id}}", "accrue-yield"] },
+                "body": { "mode": "raw", "raw": "{\"amountStroops\":\"500000000\"}", "options": { "raw": { "language": "json" } } }
+              },
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "cookie": [],
+              "status": "OK",
+              "code": 200,
+              "body": "{\"txHash\":\"f890123456789012345678901234567890123456789012345678901234567bcd\",\"txUrl\":\"https://stellar.expert/explorer/testnet/tx/f890123456789012345678901234567890123456789012345678901234567bcd\"}"
+            }
+          ]
+        },
+        {
+          "name": "Clawback (Surety Admin)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/importers/{{importer_id}}/clawback",
+              "host": ["{{base_url}}"],
+              "path": ["importers", "{{importer_id}}", "clawback"]
+            },
+            "description": "Enforce a surety clawback — seizes all collateral and reserve funds and freezes the importer account. **Surety admin role required. This action is irreversible on-chain.** Requires a verified surety license. See `docs/OPERATIONS_RUNBOOK.md` for the full clawback procedure checklist."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "url": { "raw": "{{base_url}}/importers/{{importer_id}}/clawback", "host": ["{{base_url}}"], "path": ["importers", "{{importer_id}}", "clawback"] }
+              },
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "cookie": [],
+              "status": "OK",
+              "code": 200,
+              "body": "{\"clawedStroops\":\"6000000000\",\"txHash\":\"0123456789012345678901234567890123456789012345678901234567890cde\",\"txUrl\":\"https://stellar.expert/explorer/testnet/tx/0123456789012345678901234567890123456789012345678901234567890cde\"}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
