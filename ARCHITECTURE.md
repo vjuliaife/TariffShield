@@ -6,34 +6,28 @@ A single Soroban smart contract on Stellar is the system of record for customs-b
 
 ## 1. System topology
 
+This topology diagram provides a birds-eye view of how the client browsers (importer and surety dashboards) communicate through the Next.js frontend, the Express API, the Postgres database mirror, and ultimately interact with the Soroban smart contract via the Soroban RPC endpoint. It is triggered continuously during system operation as users interact with the web dashboard, sending requests down the service pipeline to commit state updates on the Stellar network or query the local CRM database mirror.
+
 ```mermaid
-flowchart LR
-    importer[Importer<br/>browser]
-    surety[Surety admin<br/>browser]
+graph TD
+    Browser[Browser / Client UI]
+    NextJS[Next.js Web Frontend (Vercel)]
+    ExpressAPI[Express API (Render)]
+    PostgreSQL[(PostgreSQL Database)]
+    SorobanRPC[Soroban RPC]
+    SorobanContract[TariffShield Soroban Contract]
 
-    subgraph FE[Next.js web]
-      nav[Auth-gated routes]
-    end
-
-    subgraph BE[Express API]
-      api[Routes: auth, importers]
-      pg[(Postgres<br/>off-chain CRM + event log mirror)]
-      sdk[TariffShieldClient SDK]
-    end
-
-    subgraph Chain[Stellar network]
-      contract[(TariffShield Soroban contract<br/>CBLASRVG7N...PBBF)]
-      sac[(XLM SAC token<br/>CDLZFC3SYJ...CYSC)]
-    end
-
-    importer --> FE
-    surety --> FE
-    FE -- HTTPS / JWT --> BE
-    api --> pg
-    api --> sdk
-    sdk -- Soroban RPC --> contract
-    contract -- token::transfer --> sac
+    Browser -- HTTPS --> NextJS
+    NextJS -- HTTPS / JWT --> ExpressAPI
+    ExpressAPI -- SQL --> PostgreSQL
+    ExpressAPI -- JSON-RPC --> SorobanRPC
+    SorobanRPC -- JSON-RPC --> SorobanContract
+    SorobanContract -.-> ExpressAPI
 ```
+
+**Legend:**
+* **Solid Line (`--`)**: Synchronous call / Request-response loop (e.g., HTTPS requests, database queries, and direct Soroban RPC invocations).
+* **Dashed Line (`.-`)**: Asynchronous event emission / Event listening (e.g., Soroban contract event emitted to the chain and captured by the off-chain indexer).
 
 The contract owns truth for collateral, required, reserve, yield, and clawback state. Postgres mirrors metadata and the event log for fast UI rendering — but on-chain state always wins on conflict.
 
@@ -122,61 +116,61 @@ enum Error {
 
 ## 3. The tariff-spike → auto-top-up flow
 
+This sequence diagram illustrates the automated flow triggered by a tariff spike. When Customs and Border Protection (CBP) pushes new annual duty estimations to the API, the system updates the database and invokes the smart contract to raise the required collateral. If a shortfall occurs, `auto_top_up` is executed, causing the contract to atomically shift funds from the importer's reserve to the collateral pool, emitting an event that is subsequently mirrored back into the off-chain Postgres audit log.
+
 ```mermaid
 sequenceDiagram
     autonumber
-    participant IMP as Importer (UI)
+    participant CBP as CBP Webhook
     participant API as Express API
-    participant SDK as TariffShieldClient
-    participant SC  as Soroban contract
-    participant PG  as Postgres
+    participant DB as PostgreSQL (tariff_uploads / contract_events)
+    participant SDK as TariffShieldClient (SDK)
+    participant Contract as TariffShieldContract
 
-    Note over IMP,PG: Setup — already deposited 30 XLM collateral + 100 XLM reserve
-    IMP->>API: POST /importers/:id/upload-tariff-csv {annualDuty}
-    API->>API: bondFace = annualDuty × 10%; required = bondFace × 50%
+    CBP->>API: HTTP POST /importers/:id/upload-tariff-csv
+    API->>DB: Record tariff_upload (INSERT)
     API->>SDK: setRequiredCollateral(importer, requiredStroops)
-    SDK->>SC: set_required_collateral(...)
-    SC-->>SDK: event (required) — old, new
+    SDK->>Contract: set_required_collateral(importer, requiredStroops)
+    Contract-->>Contract: Emit required event
+    Contract-->>SDK: txHash & result
     SDK-->>API: txHash
-    API->>PG: INSERT tariff_uploads + contract_events
+    API->>DB: Mirror event (INSERT contract_events kind=required_changed)
 
-    Note over IMP,PG: collateral 30 XLM < required 80 XLM → shortfall 50 XLM
-
-    IMP->>API: POST /importers/:id/auto-top-up
+    Note over CBP,Contract: Auto Top-Up Execution
     API->>SDK: autoTopUp(importer)
-    SDK->>SC: auto_top_up(importer)
-    SC->>SC: moved = min(shortfall, reserve) = 50
-    SC->>SC: collateral += 50, reserve -= 50
-    SC-->>SDK: event (topup); return 50
-    SDK-->>API: txHash, movedStroops = 500000000
-    API->>PG: INSERT contract_events kind=auto_top_up
-    API-->>IMP: {movedStroops, txUrl}
+    SDK->>Contract: auto_top_up(importer)
+    Contract->>Contract: Move min(shortfall, reserve) from reserve to collateral
+    Contract-->>Contract: Emit AutoTopUpEvent (topup)
+    Contract-->>SDK: Return moved amount & txHash
+    SDK-->>API: txHash & movedStroops
+    API->>DB: Mirror event (INSERT contract_events kind=auto_top_up)
 ```
 
 The token contract is **not** touched during `auto_top_up` — both buckets are internal accounting fields on the contract. Token transfers only happen on deposits, withdrawals, and clawback.
 
 ## 4. Clawback flow
 
+This sequence diagram demonstrates the emergency clawback procedure initiated when an importer defaults. The surety admin triggers the action from the Surety Admin UI. The Express API verifies the administrator's authorization and credentials before forwarding the command via the SDK. The smart contract immediately transfers the aggregate collateral and reserve balances directly to the surety's wallet and freezes the importer's account, emitting a clawback event. The Express API mirrors this event into the PostgreSQL database for off-chain auditing and returns a success response back to the user interface.
+
 ```mermaid
 sequenceDiagram
     autonumber
-    participant SUR as Surety admin (UI)
+    participant UI as Surety Admin UI
     participant API as Express API
-    participant SDK as TariffShieldClient
-    participant SC  as Soroban contract
-    participant SAC as XLM SAC token
-    participant SW  as Surety wallet
+    participant SDK as TariffShieldClient (SDK)
+    participant Contract as TariffShieldContract
+    participant DB as PostgreSQL (contract_events)
 
-    SUR->>API: POST /importers/:id/clawback (surety_admin role)
-    API->>SDK: clawback(importer) — signed by surety keypair
-    SDK->>SC: clawback(importer)
-    SC->>SC: total = collateral + reserve
-    SC->>SAC: token.transfer(contract → surety, total)
-    SAC->>SW: credited
-    SAC-->>SC: ok
-    SC->>SC: collateral=0, reserve=0, is_clawbacked=true
-    SC-->>SDK: event (clawback) → total; return total
-    SDK-->>API: txHash, clawedStroops
+    UI->>API: HTTP POST /importers/:id/clawback
+    API->>API: Perform authorization check (surety_admin role)
+    API->>SDK: clawback(importer)
+    SDK->>Contract: clawback(importer)
+    Contract->>Contract: Executes clawback, drains balances, sets is_clawbacked=true
+    Contract-->>Contract: Emit ClawbackEvent (clawback)
+    Contract-->>SDK: Returns total clawed amount & txHash
+    SDK-->>API: Returns clawedStroops, txHash
+    API->>DB: Mirror event (INSERT contract_events kind=clawback)
+    API-->>UI: HTTP 200 JSON Response (clawedStroops, txHash, txUrl)
 ```
 
 After clawback, any subsequent `deposit_*` / `withdraw_*` / `auto_top_up` / `accrue_yield` on this importer panics with `Error::AccountFrozen`.
