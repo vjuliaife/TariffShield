@@ -10,6 +10,7 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
+    "dev": "concurrently -k -n api,web -c blue,green \"npm run dev:api\" \"npm run dev:web\"",
     "dev:api": "npm run dev --workspace=apps/api",
     "dev:web": "npm run dev --workspace=apps/web",
     "contract:build": "cd contracts && cargo build --target wasm32-unknown-unknown --release",
@@ -24,9 +25,12 @@
     "backup-state": "tsx scripts/backup-state.ts",
     "verify-upgrade": "tsx scripts/verify-upgrade.ts",
     "rollback-upgrade": "tsx scripts/rollback-upgrade.ts",
-    "list-wasm-hashes": "tsx scripts/list-wasm-hashes.ts"
+    "list-wasm-hashes": "tsx scripts/list-wasm-hashes.ts",
+    "generate:types": "openapi-typescript apps/api/openapi.yaml -o packages/api-types/index.ts"
   },
   "devDependencies": {
+    "concurrently": "^9.1.0",
+    "openapi-typescript": "^7.0.0",
     "@commitlint/cli": "^19.0.0",
     "@commitlint/config-conventional": "^19.0.0",
     "@semantic-release/changelog": "^6.0.0",

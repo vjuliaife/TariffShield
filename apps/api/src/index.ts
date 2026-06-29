@@ -20,11 +20,13 @@ import { ping } from "./db.js";
 import { pingRpc } from "./stellar.js";
 import { startReconciliationJob } from "./jobs/reconcile-balances.js";
 import { startOracleMonitor } from "./services/oracle-monitor.js";
+import { startOracleEventListener } from "./services/oracle-event-listener.js";
 import { privacyReacceptanceGate } from "./auth.js";
 import { complianceRouter } from "./routes/compliance.js";
 import { kycRouter } from "./routes/kyc.js";
 import { startComplianceReportScheduler } from "./jobs/compliance-report.js";
 import { suretyLicenseRouter } from "./routes/surety-license.js";
+import { regulatoryRouter } from "./routes/regulatory.js";
 import { healthRouter } from "./routes/health.js";
 
 const app = express();
@@ -307,6 +309,7 @@ app.use("/account", privacyRouter);
 app.use("/account", tosRouter);
 app.use("/privacy", privacyRouter);
 app.use("/surety-license", suretyLicenseRouter);
+app.use("/api/v1/regulatory", regulatoryRouter);
 app.use("/bonds", bondWebhookRouter);   // unauthenticated DocuSign webhook
 app.use("/api", bondSignaturesRouter);  // authenticated bond signature routes
 
@@ -322,6 +325,7 @@ async function start() {
   await startIndexer();
   startReconciliationJob();
   await startOracleMonitor();
+  await startOracleEventListener();
   startComplianceReportScheduler();
   app.listen(env.PORT, () => {
     console.log(`[boot] tariffshield API on :${env.PORT}`);

@@ -172,6 +172,15 @@ export class TariffShieldClient {
     return this.invokeAndSubmit(signer, "clawback", [addressToScVal(importer)]);
   }
 
+  /**
+   * Transfer the platform admin role to a new address.
+   * The current admin (signer) authorizes the handoff on-chain; the new admin
+   * becomes effective immediately and an `admin_transferred` event is emitted.
+   */
+  async transferAdmin(signer: Keypair, newAdmin: string): Promise<InvokeResult<null>> {
+    return this.invokeAndSubmit(signer, "transfer_admin", [addressToScVal(newAdmin)]);
+  }
+
   // #336 — importer formally disputes the most recent oracle-set required_collateral.
   // Must be called within the 72-hour window opened by set_required_collateral.
   async raiseDispute(signer: Keypair, importer: string): Promise<InvokeResult<null>> {
