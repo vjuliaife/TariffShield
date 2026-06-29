@@ -26,6 +26,7 @@ import { complianceRouter } from "./routes/compliance.js";
 import { kycRouter } from "./routes/kyc.js";
 import { startComplianceReportScheduler } from "./jobs/compliance-report.js";
 import { suretyLicenseRouter } from "./routes/surety-license.js";
+import { regulatoryRouter } from "./routes/regulatory.js";
 import { healthRouter } from "./routes/health.js";
 
 const app = express();
@@ -308,6 +309,7 @@ app.use("/account", privacyRouter);
 app.use("/account", tosRouter);
 app.use("/privacy", privacyRouter);
 app.use("/surety-license", suretyLicenseRouter);
+app.use("/api/v1/regulatory", regulatoryRouter);
 app.use("/bonds", bondWebhookRouter);   // unauthenticated DocuSign webhook
 app.use("/api", bondSignaturesRouter);  // authenticated bond signature routes
 

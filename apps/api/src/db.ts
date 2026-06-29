@@ -490,6 +490,32 @@ export async function migrate(): Promise<void> {
 
     CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id
       ON user_sessions(user_id) WHERE revoked_at IS NULL;
+
+    CREATE TABLE IF NOT EXISTS surety_state_licenses (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      surety_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      state_code TEXT NOT NULL,
+      license_number TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (surety_id, state_code)
+    );
+
+    CREATE TABLE IF NOT EXISTS regulatory_report_audit_logs (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      surety_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      state_code TEXT NOT NULL,
+      start_date DATE NOT NULL,
+      end_date DATE NOT NULL,
+      output_format TEXT NOT NULL,
+      generated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_surety_state_licenses_surety ON surety_state_licenses(surety_id, state_code);
+    CREATE INDEX IF NOT EXISTS idx_regulatory_report_audit_logs_surety ON regulatory_report_audit_logs(surety_id, generated_at DESC);
+
+    ALTER TABLE bond_records ADD COLUMN IF NOT EXISTS state_code TEXT NOT NULL DEFAULT 'CA';
+    ALTER TABLE importers ADD COLUMN IF NOT EXISTS business_state TEXT NOT NULL DEFAULT 'CA';
   `,
     undefined,
     "migrate_schema",
@@ -532,14 +558,13 @@ export async function ping(): Promise<void> {
  * Returns all bonds that have been registered on-chain.
  */
 export async function getActiveBonds(): Promise<{ bondId: string; stellarAddress: string; dbBalance: string }[]> {
-  const result = await pool.query(
+  const result = await pool.query<{ bond_id: string; stellar_address: string; collateral_balance: string }>(
     "SELECT bond_id, stellar_address, collateral_balance FROM importers WHERE registered_on_chain_tx IS NOT NULL"
   );
   return result.rows.map((row) => ({
     bondId: row.bond_id,
     stellarAddress: row.stellar_address,
     dbBalance: row.collateral_balance,
-    stellarAddress: row.stellar_address,
   }));
 }
 
