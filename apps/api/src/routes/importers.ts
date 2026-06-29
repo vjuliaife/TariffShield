@@ -7,6 +7,7 @@ import { authMiddleware, privacyReacceptanceGate, tosReacceptanceGate, type Auth
 import { requireLicenseVerified } from "./surety-license.js";
 import { contractClient, explorerTx, platformKeypair, suretyKeypair } from "../stellar.js";
 import { lookupCbpDutyRate } from "../services/cbp-duty-lookup.js";
+import { validateHtsRates } from "../services/hts-rate-validator.js";
 import { screenImporterEntity, screenWalletAddress } from "../services/aml-screening.js";
 import { validateBondForm301 } from "../services/cbp-bond-validation.js";
 import { env } from "../config/env.js";
@@ -243,6 +244,39 @@ importersRouter.post("/:id/upload-tariff-csv", async (req: Request, res: Respons
     return;
   }
 
+  // ── HTS statutory rate validation ──────────────────────────────────────────
+  // Cross-reference every line item's declared duty rate against the USITC HTS
+  // schedule before feeding the rates into the collateral computation.
+  const htsValidation = await validateHtsRates(
+    parse.data.lineItems.map((item) => ({
+      hts_code: item.htsCode,
+      declared_rate: item.dutyRate,
+    })),
+  );
+
+  if (htsValidation.hasBlockingErrors) {
+    res.status(422).json({
+      error: "HTS rate validation failed: one or more line items are underreported",
+      flagged: htsValidation.blocking.map((r) => ({
+        htsCode: r.hts_code,
+        declaredRate: r.declared_rate,
+        statutoryRate: r.statutory_rate,
+        message: r.message,
+      })),
+    });
+    return;
+  }
+
+  // Collect non-blocking warnings to surface in the response.
+  const htsWarnings = htsValidation.warnings.map((r) => ({
+    htsCode: r.hts_code,
+    status: r.status,
+    declaredRate: r.declared_rate,
+    statutoryRate: r.statutory_rate,
+    message: r.message,
+  }));
+
+  // ── Legacy CBP validation (kept for compatibility) ─────────────────────────
   let annualDutyTotal = 0;
   const validationReport = [];
   let hasBlockError = false;
@@ -301,6 +335,7 @@ importersRouter.post("/:id/upload-tariff-csv", async (req: Request, res: Respons
       requiredCollateralStroops: requiredStroops.toString(),
       txHash: onChain.txHash,
       txUrl: explorerTx(onChain.txHash),
+      htsWarnings: htsWarnings.length > 0 ? htsWarnings : undefined,
     });
   } catch (err: any) {
     const errMsg = String(err);
