@@ -445,6 +445,37 @@ export async function migrate(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_collateral_disputes_importer
       ON collateral_disputes(importer_id, raised_at DESC);
 
+    -- Oracle price feed: durable audit trail of every set_required_collateral event.
+    CREATE TABLE IF NOT EXISTS oracle_price_feed (
+      id                   UUID          PRIMARY KEY DEFAULT uuid_generate_v4(),
+      importer_id          UUID          REFERENCES importers(id) ON DELETE SET NULL,
+      importer_address     TEXT          NOT NULL,
+      required_collateral  NUMERIC(20,7) NOT NULL,
+      previous_collateral  NUMERIC(20,7) NOT NULL DEFAULT 0,
+      pct_change           NUMERIC(7,4)  NOT NULL DEFAULT 0,
+      tx_hash              VARCHAR(64)   NOT NULL,
+      ledger_sequence      INTEGER       NOT NULL,
+      set_by               VARCHAR(64)   NOT NULL DEFAULT '',
+      emergency_override   BOOLEAN       NOT NULL DEFAULT FALSE,
+      created_at           TIMESTAMPTZ   NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_oracle_price_feed_importer
+      ON oracle_price_feed(importer_id, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_oracle_price_feed_ledger
+      ON oracle_price_feed(ledger_sequence);
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_oracle_price_feed_tx_importer
+      ON oracle_price_feed(tx_hash, importer_address);
+
+    -- Checkpoint for the oracle event listener (resume after downtime).
+    CREATE TABLE IF NOT EXISTS listener_state (
+      id                   TEXT         PRIMARY KEY,
+      last_ledger_sequence INTEGER      NOT NULL,
+      updated_at           TIMESTAMPTZ  NOT NULL DEFAULT now()
+    );
+
     -- #306 SOC 2 CC6: server-side session table for 15-min inactivity timeout and
     -- concurrent session limits. Sessions are created on login and revoked on logout.
     CREATE TABLE IF NOT EXISTS user_sessions (
