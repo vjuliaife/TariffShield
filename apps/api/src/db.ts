@@ -445,6 +445,17 @@ export async function migrate(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_collateral_disputes_importer
       ON collateral_disputes(importer_id, raised_at DESC);
 
+    -- HTS statutory rate cache (7-day TTL, busted via POST /admin/refresh-hts-cache)
+    CREATE TABLE IF NOT EXISTS hts_rate_cache (
+      hts_code       TEXT PRIMARY KEY,
+      statutory_rate NUMERIC(8, 6),          -- decimal fraction, e.g. 0.065 for 6.5%
+      is_unavailable BOOLEAN NOT NULL DEFAULT FALSE,
+      fetched_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_hts_rate_cache_fetched
+      ON hts_rate_cache(fetched_at);
+
     -- #306 SOC 2 CC6: server-side session table for 15-min inactivity timeout and
     -- concurrent session limits. Sessions are created on login and revoked on logout.
     CREATE TABLE IF NOT EXISTS user_sessions (

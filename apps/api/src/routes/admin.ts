@@ -3,6 +3,7 @@ import { z } from "zod";
 import { pool } from "../db.js";
 import { authMiddleware, requireRole, privacyReacceptanceGate, tosReacceptanceGate, type AuthedRequest } from "../auth.js";
 import { platformKeypair, oracleKeypair } from "../stellar.js";
+import { bustHtsCache } from "../services/hts-rate-validator.js";
 
 export const adminRouter = Router();
 adminRouter.use(authMiddleware);
@@ -117,6 +118,45 @@ adminRouter.get(
       staleDays: days,
       count: accounts.length,
       accounts,
+    });
+  },
+);
+
+// ── HTS rate cache management ─────────────────────────────────────────────────
+
+/**
+ * POST /admin/refresh-hts-cache
+ *
+ * Bust the 7-day HTS statutory rate cache for the supplied HTS codes, or for
+ * all cached codes when `htsCodes` is omitted / empty.
+ *
+ * Body (optional):
+ *   { "htsCodes": ["8471.30.01", "6110.20.20"] }
+ *
+ * The next lookup for any busted code will re-fetch from the USITC HTS API.
+ */
+adminRouter.post(
+  "/refresh-hts-cache",
+  requireRole("surety_admin"),
+  async (req: Request, res: Response) => {
+    const parse = z
+      .object({ htsCodes: z.array(z.string()).optional().default([]) })
+      .safeParse(req.body);
+
+    if (!parse.success) {
+      res.status(400).json({ error: "invalid input", details: parse.error.issues });
+      return;
+    }
+
+    const deleted = await bustHtsCache(parse.data.htsCodes);
+
+    res.json({
+      message:
+        parse.data.htsCodes.length === 0
+          ? "Full HTS rate cache cleared"
+          : `Cache busted for ${parse.data.htsCodes.length} HTS code(s)`,
+      deletedRows: deleted,
+      htsCodes: parse.data.htsCodes.length > 0 ? parse.data.htsCodes : "all",
     });
   },
 );
