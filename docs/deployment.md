@@ -88,3 +88,77 @@ If a deployment introduces issues, you can rollback from the Render dashboard:
 
 - Ensure all environment variables match `.env.example` in production.
 - Monitor the `/health` endpoint for database connectivity.
+
+## Staging Environment
+
+A dedicated staging tier (`tariffshield-api-staging` on Render and a staging environment on Vercel) isolates pre-production validation, Playwright E2E testing, and manual QA.
+
+### Setup & Architecture
+
+- **Database**: A separate PostgreSQL instance (e.g., Render Managed or Neon free tier) is used.
+- **Network**: Stellar `testnet` is used.
+- **Git Branch**: Connected to the `main` branch.
+- **Workflow**: Merges to `main` trigger `.github/workflows/deploy-staging.yml` first. The production deployment workflow (`.github/workflows/deploy-api.yml`) is gated on the success of the staging deployment via `workflow_run`.
+
+### GitHub Environment Configuration
+
+Create a GitHub Actions Environment named `staging` in **Settings → Environments**. Add the following Secrets to the environment:
+
+| Secret | Description |
+|---|---|
+| `STAGING_DATABASE_URL` | Connection string for the staging PostgreSQL database. |
+| `STAGING_RENDER_DEPLOY_HOOK_URL` | Deploy hook URL for `tariffshield-api-staging` on Render. |
+| `STAGING_STELLAR_SECRET_KEY` | Secret key (`S...`) of the dedicated staging platform admin keypair. |
+| `STAGING_CONTRACT_ID` | Contract ID of the TariffShield contract deployed on Testnet for staging. |
+| `VERCEL_TOKEN` | Vercel Personal Access Token (can also be repository-wide). |
+| `VERCEL_ORG_ID` | Vercel Organization ID (can also be repository-wide). |
+| `VERCEL_PROJECT_ID` | Vercel Project ID (can also be repository-wide). |
+
+### Deploying the Soroban Contract to Testnet
+
+To deploy or re-deploy the TariffShield contract to Stellar Testnet for staging:
+
+1. **Generate and Fund Staging Admin Keypair**:
+   Generate a keypair locally (or use the one stored in `STAGING_STELLAR_SECRET_KEY`):
+   ```bash
+   stellar keys generate --fund staging-admin --network testnet
+   ```
+   *Note: Friendbot will automatically fund this account with 10,000 testnet XLM.*
+
+2. **Build and Optimize the Contract**:
+   Navigate to the repository root and build/optimize the Rust contract:
+   ```bash
+   # Build the release WASM
+   npm run build
+   cd contracts && cargo build --release --target wasm32-unknown-unknown
+   
+   # Optimize the WASM binary
+   stellar contract optimize --wasm target/wasm32-unknown-unknown/release/tariff_shield.wasm
+   ```
+
+3. **Deploy the Contract**:
+   Deploy the optimized WASM to Testnet:
+   ```bash
+   stellar contract deploy \
+     --network testnet \
+     --source staging-admin \
+     --wasm target/wasm32-unknown-unknown/release/tariff_shield.optimized.wasm
+   ```
+   This command will output the new contract ID (e.g., `CBLAS...`). Save this as `STAGING_CONTRACT_ID` in your GitHub environment secrets.
+
+4. **Initialize the Contract State**:
+   Invoke the `initialize` function on the newly deployed contract:
+   ```bash
+   stellar contract invoke \
+     --id <STAGING_CONTRACT_ID> \
+     --network testnet \
+     --source staging-admin \
+     -- \
+     initialize \
+     --admins '["<STAGING_ADMIN_PUBLIC_KEY>"]' \
+     --surety "<STAGING_SURETY_PUBLIC_KEY>" \
+     --token "<TESTNET_USDC_TOKEN_CONTRACT_ID>" \
+     --oracle_admin "<STAGING_ORACLE_ADMIN_PUBLIC_KEY>" \
+     --emergency_oracle_admin "<STAGING_EMERGENCY_ORACLE_ADMIN_PUBLIC_KEY>"
+   ```
+
