@@ -14,6 +14,21 @@ npm run dev:api        # start Express API on :3001
 npm run dev:web        # start Next.js dashboard on :3000
 ```
 
+### Code Formatting & Linting
+
+Before pushing your changes, please ensure that your Rust code is properly formatted. You can run formatting locally:
+
+```bash
+cargo fmt --all
+```
+
+To automate this check before committing, we suggest setting up a Git `pre-commit` hook. In `.git/hooks/pre-commit` (or using a tool like `husky`), you can add the following to check formatting:
+
+```bash
+#!/bin/sh
+cargo fmt --all -- --check
+```
+
 ---
 
 ## Pull Request Process
