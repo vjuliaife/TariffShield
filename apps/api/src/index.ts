@@ -25,6 +25,7 @@ import { complianceRouter } from "./routes/compliance.js";
 import { kycRouter } from "./routes/kyc.js";
 import { startComplianceReportScheduler } from "./jobs/compliance-report.js";
 import { suretyLicenseRouter } from "./routes/surety-license.js";
+import { healthRouter } from "./routes/health.js";
 
 const app = express();
 
@@ -246,61 +247,7 @@ const authLimiter = rateLimit({
   message: { error: "too many auth attempts; try again in 15 minutes" },
 });
 
-app.get("/health", async (_req, res) => {
-  const checks = {
-    db: "ok",
-    soroban: "ok",
-  };
-  let hasError = false;
-
-  try {
-    await ping();
-  } catch (err) {
-    checks.db = "failed";
-    hasError = true;
-  }
-
-  try {
-    await pingRpc();
-  } catch (err) {
-    checks.soroban = "failed";
-    hasError = true;
-  }
-
-  if (hasError) {
-    res.status(503).json({
-      status: "degraded",
-      ...checks,
-    });
-  } else {
-    res.json({
-      status: "ok",
-      ...checks,
-      contractId: env.TARIFF_SHIELD_CONTRACT_ID,
-      network: env.STELLAR_NETWORK,
-      env: isProduction ? "production" : "development",
-    });
-  }
-});
-
-/**
- * Liveness probe: returns 200 OK unconditionally as long as the process is running.
- */
-app.get("/health/live", (_req, res) => {
-  res.status(200).send("OK");
-});
-
-/**
- * Readiness probe: checks all dependencies before clearing the service for traffic.
- */
-app.get("/health/ready", async (_req, res) => {
-  try {
-    await Promise.all([ping(), pingRpc()]);
-    res.status(200).send("OK");
-  } catch (err) {
-    res.status(503).send("Service Unavailable");
-  }
-});
+app.use("/health", healthRouter);
 
 client.collectDefaultMetrics();
 

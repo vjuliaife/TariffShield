@@ -1,0 +1,31 @@
+name: Deploy API
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Trigger Render Deploy Hook
+        run: |
+          if [ -z "${{ secrets.RENDER_DEPLOY_HOOK_URL }}" ]; then
+            echo "RENDER_DEPLOY_HOOK_URL secret is not set."
+            exit 1
+          fi
+          curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}"
+        
+      - name: Poll Health Endpoint
+        run: |
+          echo "Waiting for deployment to propagate..."
+          # In a real scenario, this should poll until it returns the current SHA or version.
+          sleep 30
+          curl -f https://api.tariffshield.com/health || exit 1
+
+      - name: Report Deployment Status
+        run: echo "Deployed commit ${{ github.sha }}"

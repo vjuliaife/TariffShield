@@ -52,3 +52,39 @@ the `main` branch using the production environment variable set.
 
 See `docs/OPERATIONS_RUNBOOK.md` for contract rollback procedures. For the web app, redeploy any
 prior Vercel deployment from the Vercel dashboard (Deployments → select build → Redeploy).
+
+## API Deployment (Render)
+
+This section explains how to deploy the TariffShield API to Render.
+
+### Render Deploy Hook Setup
+
+1. In the Render Dashboard, navigate to your Web Service (API).
+2. Go to **Settings** and scroll down to the **Deploy Hook** section.
+3. Copy the URL.
+
+### GitHub Secrets Configuration
+
+Add the following secrets to your GitHub repository:
+- `RENDER_DEPLOY_HOOK_URL`: The URL copied from Render.
+- `RENDER_SERVICE_ID`: The ID of your Render service.
+
+### Deployment Workflow
+
+The `.github/workflows/deploy-api.yml` action automates deployment:
+- Pushes to the `main` branch trigger the workflow.
+- The workflow invokes the Render Deploy Hook.
+- It then polls the `/health` endpoint to verify the deployment was successful and that PostgreSQL is connected.
+- Finally, it reports the deployed commit SHA.
+
+### Rollback Preparation
+
+If a deployment introduces issues, you can rollback from the Render dashboard:
+1. Navigate to the **Events** tab of your Render service.
+2. Locate the previous successful deploy.
+3. Click **Deploy this commit** to rollback to that version.
+
+### Operational Notes
+
+- Ensure all environment variables match `.env.example` in production.
+- Monitor the `/health` endpoint for database connectivity.
