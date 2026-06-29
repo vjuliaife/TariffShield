@@ -1,0 +1,46 @@
+# Better Uptime (Logtail) Monitor Configuration
+# API Health Monitor
+- name: TariffShield API Health
+  url: https://api.tariffshield.com/health
+  monitor_type: status
+  check_interval: 60
+  assertions:
+    - type: body_contains
+      value: '"status":"ok"'
+  alert_contacts:
+    - email: on-call@tariffshield.com
+  recovery_period: 0
+  confirmation_period: 0
+  call: true
+  sms: true
+  email: true
+  push: true
+  # Escalation policy: notify immediately, page if down > 5 mins
+  escalation_policy:
+    - notify: [email]
+      delay: 0
+    - notify: [sms, call]
+      delay: 300
+
+# Web App Monitor
+- name: TariffShield Web App
+  url: https://app.tariffshield.com/
+  monitor_type: status
+  check_interval: 60
+  assertions:
+    - type: body_contains
+      value: "TariffShield"
+  alert_contacts:
+    - email: on-call@tariffshield.com
+  recovery_period: 0
+  confirmation_period: 0
+  call: true
+  sms: true
+  email: true
+  push: true
+  # Escalation policy: notify immediately, page if down > 5 mins
+  escalation_policy:
+    - notify: [email]
+      delay: 0
+    - notify: [sms, call]
+      delay: 300

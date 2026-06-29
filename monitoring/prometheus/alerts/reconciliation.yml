@@ -1,0 +1,22 @@
+groups:
+  - name: balance-reconciliation-alerts
+    rules:
+      - alert: ContractBalanceDriftDetected
+        expr: contract_balance_drift_count > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "On-chain vs Database balance drift detected!"
+          description: "One or more bonds have a balance drift > 0.1% between PostgreSQL and the Soroban contract. This requires immediate manual reconciliation."
+          runbook_url: "https://github.com/TariffShield/TariffShield/blob/main/monitoring/runbooks/balance-drift.md"
+
+      - alert: ReconciliationJobNotRunning
+        expr: rate(reconciliation_runs_total[15m]) == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Balance reconciliation job is not running"
+          description: "No successful balance reconciliation runs have been detected in the last 15 minutes. Drift detection is currently disabled."
+          runbook_url: "https://github.com/TariffShield/TariffShield/blob/main/monitoring/runbooks/balance-drift.md"

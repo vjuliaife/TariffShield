@@ -1,0 +1,84 @@
+name: DAST Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  dast_scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Start Staging Environment
+        run: |
+          docker compose up -d postgres
+          # Wait for Postgres to be healthy
+          docker compose exec -T postgres sh -c "until pg_isready -U tariffshield -d tariffshield; do sleep 1; done"
+          
+          # Setup environment and start api
+          cp .env.example .env
+          cp .env apps/api/.env
+          docker compose up -d api
+          
+          # Wait for API to be ready
+          until curl -s http://localhost:3002/health | grep -q "ok"; do
+            echo "Waiting for API..."
+            sleep 2
+          done
+
+      - name: Authenticate and Generate JWT
+        id: auth
+        run: |
+          # Register test importer
+          curl -s -X POST http://localhost:3002/auth/signup \
+            -H "Content-Type: application/json" \
+            -d '{"email":"test-dast-importer@tariffshield.io","password":"Password123!","role":"importer"}'
+          
+          # Login
+          LOGIN_RES=$(curl -s -X POST http://localhost:3002/auth/login \
+            -H "Content-Type: application/json" \
+            -d '{"email":"test-dast-importer@tariffshield.io","password":"Password123!"}')
+          
+          JWT_TOKEN=$(echo "$LOGIN_RES" | jq -r '.token')
+          echo "JWT_TOKEN=$JWT_TOKEN" >> $GITHUB_ENV
+
+      - name: Pull ZAP Image
+        run: docker pull zaproxy/zap-stable
+
+      - name: Run OWASP ZAP API Scan (DAST)
+        run: |
+          docker run --network="host" -v $(pwd):/zap/wrk/:rw \
+            -e ZAP_AUTH_HEADER="Authorization" \
+            -e ZAP_AUTH_HEADER_VALUE="Bearer ${{ env.JWT_TOKEN }}" \
+            -t zaproxy/zap-stable zap-api-scan.py \
+            -t /zap/wrk/docs/security/openapi.yaml \
+            -f openapi \
+            -J report.json || true # Continue even if ZAP script exits with errors/warnings so we can ingest and verify manually
+
+      - name: Ingest Findings into DB
+        env:
+          DATABASE_URL: postgres://tariffshield:tariffshield_dev_password@localhost:5443/tariffshield
+        run: npx tsx scripts/ingest-dast-findings.ts
+
+      - name: Verify Findings and Fail on High/Critical
+        run: npx tsx scripts/verify-dast-findings.ts
+
+      - name: Store DAST report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZAP_Report
+          path: |
+            report.json

@@ -31,6 +31,14 @@
   "devDependencies": {
     "concurrently": "^9.1.0",
     "openapi-typescript": "^7.0.0",
+    "@commitlint/cli": "^19.0.0",
+    "@commitlint/config-conventional": "^19.0.0",
+    "@semantic-release/changelog": "^6.0.0",
+    "@semantic-release/exec": "^6.0.0",
+    "@semantic-release/git": "^10.0.0",
+    "@semantic-release/github": "^10.0.0",
+    "@semantic-release/npm": "^12.0.0",
+    "semantic-release": "^24.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.2"
   },

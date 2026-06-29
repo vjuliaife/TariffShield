@@ -1,11 +1,24 @@
 import { Keypair } from "@stellar/stellar-sdk";
 import { TariffShieldClient } from "@tariffshield/sdk";
 import client from "prom-client";
+import { trace, SpanStatusCode } from "@opentelemetry/api";
 import { env } from "./config/env.js";
 import { createRpcServer } from "./lib/soroban/rpcClient.js";
 
+const tracer = trace.getTracer("tariffshield-stellar");
+
+// #339 — general admin (registration, withdrawals, upgrades)
 export const platformKeypair = Keypair.fromSecret(env.PLATFORM_STELLAR_SECRET);
 export const suretyKeypair = Keypair.fromSecret(env.SURETY_STELLAR_SECRET);
+// #339 — oracle-only role (set_required_collateral); falls back to platformKeypair in dev
+export const oracleKeypair = env.ORACLE_STELLAR_SECRET
+  ? Keypair.fromSecret(env.ORACLE_STELLAR_SECRET)
+  : platformKeypair;
+
+// #332 — emergency oracle override role
+export const emergencyOracleKeypair = env.EMERGENCY_ADMIN_SECRET
+  ? Keypair.fromSecret(env.EMERGENCY_ADMIN_SECRET)
+  : platformKeypair;
 
 export const sorobanRpcCallsTotal = new client.Counter({
   name: "soroban_rpc_calls_total",
@@ -35,21 +48,31 @@ export const contractClient = new Proxy(baseClient, {
     if (typeof original === "function") {
       return async (...args: any[]) => {
         const methodName = String(prop);
-        const start = process.hrtime();
-        try {
-          const result = await original.apply(target, args);
-          const diff = process.hrtime(start);
-          const duration = diff[0] + diff[1] / 1e9;
-          sorobanRpcCallsTotal.inc({ method: methodName, success: "true" });
-          sorobanRpcDurationSeconds.observe({ method: methodName }, duration);
-          return result;
-        } catch (err) {
-          const diff = process.hrtime(start);
-          const duration = diff[0] + diff[1] / 1e9;
-          sorobanRpcCallsTotal.inc({ method: methodName, success: "false" });
-          sorobanRpcDurationSeconds.observe({ method: methodName }, duration);
-          throw err;
-        }
+        return tracer.startActiveSpan(`soroban.rpc.${methodName}`, async (span) => {
+          span.setAttributes({
+            "soroban.method": methodName,
+            "soroban.network": env.STELLAR_NETWORK_PASSPHRASE,
+          });
+          const start = process.hrtime();
+          try {
+            const result = await original.apply(target, args);
+            const diff = process.hrtime(start);
+            const duration = diff[0] + diff[1] / 1e9;
+            sorobanRpcCallsTotal.inc({ method: methodName, success: "true" });
+            sorobanRpcDurationSeconds.observe({ method: methodName }, duration);
+            span.setStatus({ code: SpanStatusCode.OK });
+            return result;
+          } catch (err) {
+            const diff = process.hrtime(start);
+            const duration = diff[0] + diff[1] / 1e9;
+            sorobanRpcCallsTotal.inc({ method: methodName, success: "false" });
+            sorobanRpcDurationSeconds.observe({ method: methodName }, duration);
+            span.setStatus({ code: SpanStatusCode.ERROR, message: String(err) });
+            throw err;
+          } finally {
+            span.end();
+          }
+        });
       };
     }
     return original;
@@ -62,19 +85,70 @@ export const explorerTx = (hash: string): string =>
 export async function getCurrentLedgerSequence(): Promise<number> {
   const server = createRpcServer(env.STELLAR_RPC_URL);
   const methodName = "getLatestLedger";
-  const start = process.hrtime();
-  try {
-    const latest = await server.getLatestLedger();
-    const diff = process.hrtime(start);
-    const duration = diff[0] + diff[1] / 1e9;
-    sorobanRpcCallsTotal.inc({ method: methodName, success: "true" });
-    sorobanRpcDurationSeconds.observe({ method: methodName }, duration);
-    return latest.sequence;
-  } catch (err) {
-    const diff = process.hrtime(start);
-    const duration = diff[0] + diff[1] / 1e9;
-    sorobanRpcCallsTotal.inc({ method: methodName, success: "false" });
-    sorobanRpcDurationSeconds.observe({ method: methodName }, duration);
-    throw err;
-  }
+  return tracer.startActiveSpan(`soroban.rpc.${methodName}`, async (span) => {
+    span.setAttributes({
+      "soroban.method": methodName,
+      "soroban.network": env.STELLAR_NETWORK_PASSPHRASE,
+    });
+    const start = process.hrtime();
+    try {
+      const latest = await server.getLatestLedger();
+      const diff = process.hrtime(start);
+      const duration = diff[0] + diff[1] / 1e9;
+      sorobanRpcCallsTotal.inc({ method: methodName, success: "true" });
+      sorobanRpcDurationSeconds.observe({ method: methodName }, duration);
+      span.setStatus({ code: SpanStatusCode.OK });
+      return latest.sequence;
+    } catch (err) {
+      const diff = process.hrtime(start);
+      const duration = diff[0] + diff[1] / 1e9;
+      sorobanRpcCallsTotal.inc({ method: methodName, success: "false" });
+      sorobanRpcDurationSeconds.observe({ method: methodName }, duration);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: String(err) });
+      throw err;
+    } finally {
+      span.end();
+    }
+  });
+}
+
+/**
+ * Pings the Soroban RPC server to check if it's reachable.
+ */
+export async function pingRpc(): Promise<void> {
+  const server = createRpcServer(env.STELLAR_RPC_URL);
+  await server.getNetwork();
+}
+
+/**
+ * Retrieves the current collateral balance for a bond directly from the Soroban contract.
+ * @param stellarAddress The importer's Stellar address.
+ * @returns The on-chain collateral balance as a string.
+ */
+export async function getBondOnChain(stellarAddress: string): Promise<string> {
+  const acct = await contractClient.getAccount(stellarAddress);
+  return acct.collateralBalance.toString();
+}
+
+/**
+ * Retrieves the required_collateral for an importer address from the contract.
+ */
+export async function getBondOnChain(stellarAddress: string): Promise<string> {
+  // Use the contractClient proxy which already has metric instrumentation
+  const account = await contractClient.getAccount(stellarAddress);
+  return account.collateralBalance.toString();
+}
+
+/**
+ * Emergency override for collateral requirements, bypassing staleness and rate limits (#332).
+ */
+export async function emergencySetRequiredCollateral(importer: string, newRequired: bigint): Promise<void> {
+  await contractClient.setRequiredCollateral(
+    emergencyOracleKeypair,
+    importer,
+    newRequired,
+    undefined,
+    true, // bypassRateLimit
+    true, // emergency
+  );
 }

@@ -1,0 +1,32 @@
+groups:
+  - name: tariffshield_database
+    rules:
+      - alert: DbSlowQueryRateHigh
+        expr: rate(db_slow_queries_total{threshold="500ms"}[5m]) > 1
+        for: 3m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "High rate of slow database queries ({{ $value | humanize }}/s)"
+          description: >
+            More than 1 slow query per second (≥500ms) has been observed for the
+            last 3 minutes on instance {{ $labels.instance }}.
+            Check pg_stat_statements for the top offenders:
+              SELECT query, total_exec_time, calls
+              FROM pg_stat_statements
+              ORDER BY total_exec_time DESC LIMIT 10;
+
+      - alert: DbCriticalSlowQuery
+        expr: increase(db_slow_queries_total{threshold="2000ms"}[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          team: backend
+        annotations:
+          summary: "Critically slow database query detected (≥2s)"
+          description: >
+            At least one query took ≥2000ms on instance {{ $labels.instance }}.
+            Investigate immediately — check the API structured logs for
+            { "level": "error", "caller": "<query_name>" } entries and review
+            EXPLAIN ANALYZE output for the offending query.

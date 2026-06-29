@@ -18,7 +18,7 @@ if (!parsed.success) {
     const varName = issue.path[0];
     const shape = Env.shape[varName as keyof typeof Env.shape];
     const description = shape?.description || "No description provided";
-    console.error(`  - ${varName}: ${issue.message} - ${description}`);
+    console.error(`  - ${String(varName)}: ${issue.message} - ${description}`);
   }
   process.exit(1);
 }

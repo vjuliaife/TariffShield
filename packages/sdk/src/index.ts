@@ -17,6 +17,19 @@ export interface TariffShieldAccount {
   reserveBalance: bigint;
   yieldAccrued: bigint;
   isClawbacked: boolean;
+  collateralLastUpdated: bigint;
+  // #336 — dispute window fields
+  disputeExpiresAt: bigint;
+  preDisputeRequired: bigint;
+  disputeRaised: boolean;
+  // #326 / #331 — oracle update tracking
+  oracleLastUpdated: bigint;
+}
+
+// #331 — one entry in the on-chain collateral audit trail
+export interface CollateralHistoryEntry {
+  value: bigint;
+  timestamp: bigint;
 }
 
 export interface InvokeResult<T> {
@@ -106,14 +119,29 @@ export class TariffShieldClient {
   }
 
   async setRequiredCollateral(
-    signer: Keypair,
+    signers: Keypair[],
     importer: string,
     newRequired: bigint,
+    priceOracleContract?: string,
+    bypassRateLimit?: boolean,
+    emergency?: boolean,
   ): Promise<InvokeResult<null>> {
-    return this.invokeAndSubmit(signer, "set_required_collateral", [
+    const args = [
+      addressToScVal(signer.publicKey()),
       addressToScVal(importer),
       nativeToScVal(newRequired, { type: "i128" }),
-    ]);
+    ];
+
+    if (priceOracleContract) {
+      args.push(nativeToScVal({ Some: addressToScVal(priceOracleContract) }, { type: "option" }));
+    } else {
+      args.push(nativeToScVal(null, { type: "option" }));
+    }
+
+    args.push(nativeToScVal(bypassRateLimit ?? false, { type: "bool" }));
+    args.push(nativeToScVal(emergency ?? false, { type: "bool" }));
+
+    return this.invokeAndSubmit(signer, "set_required_collateral", args);
   }
 
   async autoTopUp(signer: Keypair, importer: string): Promise<InvokeResult<bigint>> {
@@ -144,6 +172,21 @@ export class TariffShieldClient {
     return this.invokeAndSubmit(signer, "clawback", [addressToScVal(importer)]);
   }
 
+  // #336 — importer formally disputes the most recent oracle-set required_collateral.
+  // Must be called within the 72-hour window opened by set_required_collateral.
+  async raiseDispute(signer: Keypair, importer: string): Promise<InvokeResult<null>> {
+    return this.invokeAndSubmit(signer, "raise_dispute", [addressToScVal(importer)]);
+  }
+
+  // #336 — platform admin resolves an open dispute.
+  // accept=true keeps the new oracle value; accept=false reverts to pre-dispute value.
+  async resolveDispute(signer: Keypair, importer: string, accept: boolean): Promise<InvokeResult<null>> {
+    return this.invokeAndSubmit(signer, "resolve_dispute", [
+      addressToScVal(importer),
+      nativeToScVal(accept, { type: "bool" }),
+    ]);
+  }
+
   // ----- Read methods (simulate only) -----
 
   async getAccount(importer: string): Promise<TariffShieldAccount> {
@@ -156,7 +199,22 @@ export class TariffShieldClient {
       reserveBalance: BigInt(obj.reserve_balance as string),
       yieldAccrued: BigInt(obj.yield_accrued as string),
       isClawbacked: Boolean(obj.is_clawbacked),
+      collateralLastUpdated: BigInt(obj.collateral_last_updated as string | number),
+      disputeExpiresAt: BigInt((obj.dispute_expires_at as string | number) ?? 0),
+      preDisputeRequired: BigInt((obj.pre_dispute_required as string) ?? 0),
+      disputeRaised: Boolean(obj.dispute_raised),
+      oracleLastUpdated: BigInt((obj.oracle_last_updated as string | number) ?? 0),
     };
+  }
+
+  // #331 — return the rolling on-chain audit trail of required_collateral changes.
+  async getCollateralHistory(importer: string): Promise<CollateralHistoryEntry[]> {
+    const raw = await this.simulate("get_collateral_history", [addressToScVal(importer)]);
+    const arr = scValToNative(raw) as Array<Record<string, unknown>>;
+    return arr.map((entry) => ({
+      value: BigInt((entry.value as string | number) ?? 0),
+      timestamp: BigInt((entry.timestamp as string | number) ?? 0),
+    }));
   }
 
   async getAdmin(): Promise<string> {
@@ -197,6 +255,45 @@ export class TariffShieldClient {
       throw new Error(`simulate ${method} returned no value`);
     }
     return sim.result.retval;
+  }
+
+  private async invokeAndSubmitMulti<T>(
+    signers: Keypair[],
+    method: string,
+    args: xdr.ScVal[],
+    primary: Keypair,
+  ): Promise<InvokeResult<T>> {
+    const account = await this.server.getAccount(primary.publicKey());
+    const tx = new TransactionBuilder(account, {
+      fee: DEFAULT_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(this.contract.call(method, ...args))
+      .setTimeout(this.txTimeoutSeconds)
+      .build();
+
+    const prepared = await this.server.prepareTransaction(tx);
+    for (const signer of signers) {
+      prepared.sign(signer);
+    }
+    const sendResponse = await this.server.sendTransaction(prepared);
+    if (sendResponse.status === "ERROR") {
+      throw new Error(`send failed: ${JSON.stringify(sendResponse.errorResult)}`);
+    }
+    const txHash = sendResponse.hash;
+
+    let txResult = await this.server.getTransaction(txHash);
+    const deadline = Date.now() + 60_000;
+    while (txResult.status === "NOT_FOUND" && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 1500));
+      txResult = await this.server.getTransaction(txHash);
+    }
+    if (txResult.status !== "SUCCESS") {
+      throw new Error(`tx ${txHash} status=${txResult.status}`);
+    }
+    const retval = txResult.returnValue;
+    const parsed = (retval ? scValToNative(retval) : null) as T;
+    return { txHash, result: parsed };
   }
 
   private async invokeAndSubmit<T>(

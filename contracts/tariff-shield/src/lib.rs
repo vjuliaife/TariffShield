@@ -30,6 +30,12 @@ pub enum DataKey {
     Account(Address),
     Proposal(u64),
     ProposalCounter,
+    PriceOracle,
+    Version,
+    // #339 — dedicated oracle role; can set_required_collateral but not upgrade/register
+    OracleAdmin,
+    EmergencyOracleAdmin,
+    HasUpdated(Address),
 }
 
 #[contracttype]
@@ -38,6 +44,14 @@ pub struct Proposal {
     pub new_wasm_hash: BytesN<32>,
     pub approvals: Vec<Address>,
     pub expiry_ledger: u32,
+}
+
+// #331 — one entry in the rolling on-chain audit trail
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CollateralHistoryEntry {
+    pub value: i128,
+    pub timestamp: u64,
 }
 
 #[contracttype]
@@ -49,21 +63,49 @@ pub struct Account {
     pub reserve_balance: i128,
     pub yield_accrued: i128,
     pub is_clawbacked: bool,
+    // Updated whenever collateral state changes (for staleness check).
+    pub collateral_last_updated: u64,
+    // #331 — rolling history of the last 12 oracle-set required_collateral values.
+    pub collateral_history: Vec<CollateralHistoryEntry>,
+    // #336 — 72-hour dispute window fields.
+    // Timestamp until which the importer may raise a dispute (0 = no open window).
+    pub dispute_expires_at: u64,
+    // The required_collateral value in effect before the last oracle update.
+    pub pre_dispute_required: i128,
+    // True once the importer formally raises a dispute; cleared by resolve_dispute.
+    pub dispute_raised: bool,
+    // #326 — tracks the last time the oracle set required_collateral separately from
+    // collateral_last_updated so that the rate-limit window does not count registration.
+    pub oracle_last_updated: u64,
 }
 
 #[contractimpl]
 impl TariffShieldContract {
-    pub fn initialize(env: Env, admins: Vec<Address>, surety: Address, token: Address) {
+    /// #339 — `oracle_admin` is required auth; set to same as admins[0] if not separate.
+    pub fn initialize(
+        env: Env,
+        admins: Vec<Address>,
+        surety: Address,
+        token: Address,
+        oracle_admin: Address,
+        emergency_oracle_admin: Address,
+    ) {
         if env.storage().instance().has(&DataKey::Admins) {
             panic_with_error!(&env, Error::AlreadyInitialized);
         }
         for admin in admins.iter() {
             admin.require_auth();
         }
+        oracle_admin.require_auth();
+        emergency_oracle_admin.require_auth();
         env.storage().instance().set(&DataKey::Admins, &admins);
         env.storage().instance().set(&DataKey::Surety, &surety);
         env.storage().instance().set(&DataKey::Token, &token);
+        env.storage().instance().set(&DataKey::OracleAdmin, &oracle_admin);
+        env.storage().instance().set(&DataKey::EmergencyOracleAdmin, &emergency_oracle_admin);
         env.storage().instance().set(&DataKey::ProposalCounter, &0u64);
+        env.storage().instance().set(&DataKey::OracleSigners, &oracle_signers);
+        env.storage().instance().set(&DataKey::OracleThreshold, &2u32);
     }
 
     pub fn register_importer(env: Env, importer: Address, bond_id: u64, required_collateral: i128) {
@@ -83,6 +125,14 @@ impl TariffShieldContract {
             reserve_balance: 0,
             yield_accrued: 0,
             is_clawbacked: false,
+            // Registration sets the staleness clock; oracle_last_updated stays 0 so the
+            // first set_required_collateral call is not blocked by the 24-hour rate limit.
+            collateral_last_updated: env.ledger().timestamp(),
+            collateral_history: Vec::new(&env),
+            dispute_expires_at: 0,
+            pre_dispute_required: required_collateral,
+            dispute_raised: false,
+            oracle_last_updated: 0,
         };
         env.storage().persistent().set(&key, &account);
         env.events().publish(
@@ -98,6 +148,7 @@ impl TariffShieldContract {
         }
         let mut acct = load_account(&env, &importer);
         require_active(&env, &acct);
+        require_fresh_collateral(&env, &importer, &acct);
         let token_addr = get_token(&env);
         token::Client::new(&env, &token_addr).transfer(
             &from,
@@ -119,6 +170,7 @@ impl TariffShieldContract {
         }
         let mut acct = load_account(&env, &importer);
         require_active(&env, &acct);
+        require_fresh_collateral(&env, &importer, &acct);
         let token_addr = get_token(&env);
         token::Client::new(&env, &token_addr).transfer(
             &from,
@@ -133,26 +185,159 @@ impl TariffShieldContract {
         );
     }
 
-    pub fn set_required_collateral(env: Env, importer: Address, new_required: i128) {
-        let admin = get_admin(&env);
-        admin.require_auth();
+    pub fn set_required_collateral(
+        env: Env,
+        caller: Address,
+        importer: Address,
+        new_required: i128,
+        price_oracle_contract: Option<Address>,
+        bypass_rate_limit: bool,
+        emergency: bool,
+    ) {
+        caller.require_auth();
+        if emergency {
+            let emergency_admin = get_emergency_oracle_admin(&env);
+            if caller != emergency_admin {
+                panic_with_error!(&env, Error::UnauthorizedEmergencyOverride);
+            }
+        } else {
+            let oracle_admin = get_oracle_admin(&env);
+            if caller != oracle_admin {
+                panic_with_error!(&env, Error::UnauthorizedRole);
+            }
+        }
+
         if new_required < 0 {
             panic_with_error!(&env, Error::InvalidAmount);
         }
         let mut acct = load_account(&env, &importer);
+        let current_timestamp = env.ledger().timestamp();
+
+        // Rate limit: max one oracle update per 24 hours.
+        // Uses oracle_last_updated (not collateral_last_updated) so registration does
+        // not count against the first oracle update.
+        let cooldown_seconds: u64 = 86400;
+        if !bypass_rate_limit && !emergency && acct.oracle_last_updated > 0 {
+            if current_timestamp < acct.oracle_last_updated + cooldown_seconds {
+                let retry_after = acct.oracle_last_updated + cooldown_seconds;
+                env.events().publish(
+                    (symbol_short!("ratelimit"), importer.clone()),
+                    retry_after,
+                );
+                panic_with_error!(&env, Error::RateLimitExceededError);
+            }
+        }
+
+        let oracle_rate: i128 = if let Some(oracle_addr) = price_oracle_contract.clone() {
+            get_usdc_usd_rate(&env, &oracle_addr)
+        } else if let Some(oracle_addr) = get_price_oracle_optional(&env) {
+            get_usdc_usd_rate(&env, &oracle_addr)
+        } else {
+            10000
+        };
+
+        let adjusted_required = if oracle_rate != 10000 {
+            ((new_required as i128) * 10000) / oracle_rate
+        } else {
+            new_required
+        };
+
+        if oracle_rate < 9800 || oracle_rate > 10200 {
+            env.events().publish(
+                (symbol_short!("depeg"), importer.clone()),
+                oracle_rate,
+            );
+        }
+
         let old_required = acct.required_collateral;
-        acct.required_collateral = new_required;
+
+        // #326 — reject any single update that more than 5× the current value.
+        // Allows large legitimate increases through multi-step escalation while
+        // bounding the damage from a compromised or misconfigured oracle key.
+        if old_required > 0 && adjusted_required > old_required.saturating_mul(5) {
+            panic_with_error!(&env, Error::CollateralCapExceeded);
+        }
+
+        // #331 — append the old value to the rolling on-chain audit trail before update.
+        let entry = CollateralHistoryEntry {
+            value: old_required,
+            timestamp: current_timestamp,
+        };
+        acct.collateral_history.push_back(entry);
+        let hist_len = acct.collateral_history.len();
+        if hist_len > 12 {
+            let start = hist_len - 12;
+            let mut trimmed = Vec::new(&env);
+            for i in start..hist_len {
+                trimmed.push_back(acct.collateral_history.get(i).unwrap());
+            }
+            acct.collateral_history = trimmed;
+        }
+
+        // #336 — open a 72-hour window during which the importer may raise a dispute.
+        // Any existing dispute is cleared because the oracle has issued a new value.
+        acct.pre_dispute_required = old_required;
+        acct.dispute_expires_at = current_timestamp + 72 * 3600;
+        acct.dispute_raised = false;
+
+        acct.required_collateral = adjusted_required;
+        acct.collateral_last_updated = current_timestamp;
+        acct.oracle_last_updated = current_timestamp;
         save_account(&env, &importer, &acct);
-        env.events().publish(
-            (symbol_short!("required"), importer.clone()),
-            (old_required, new_required),
-        );
+        if emergency {
+            env.events().publish(
+                (Symbol::new(&env, "EmergencyOracleUpdate"), importer.clone()),
+                (old_required, adjusted_required, current_timestamp, caller),
+            );
+        } else {
+            env.events().publish(
+                (symbol_short!("required"), importer.clone()),
+                (old_required, adjusted_required),
+            );
+        }
+    }
+
+    /// Rotate the oracle signer set — requires 2-of-3 from the current signer set.
+    pub fn update_oracle_signers(env: Env, new_signers: Vec<Address>, approvals: Vec<Address>) {
+        if new_signers.len() != 3 {
+            panic_with_error!(&env, Error::InvalidSignatureSet);
+        }
+        let oracle_signers: Vec<Address> = env.storage().instance()
+            .get(&DataKey::OracleSigners)
+            .unwrap_or_else(|| panic_with_error!(&env, Error::NotInitialized));
+        let threshold: u32 = env.storage().instance().get(&DataKey::OracleThreshold).unwrap_or(2u32);
+
+        let mut seen = Vec::new(&env);
+        let mut valid_count: u32 = 0;
+        for signer in approvals.iter() {
+            if seen.contains(signer.clone()) {
+                panic_with_error!(&env, Error::InvalidSignatureSet);
+            }
+            seen.push_back(signer.clone());
+            if oracle_signers.contains(signer.clone()) {
+                signer.require_auth();
+                valid_count += 1;
+            }
+        }
+        if valid_count < threshold {
+            panic_with_error!(&env, Error::InsufficientSignatures);
+        }
+        env.storage().instance().set(&DataKey::OracleSigners, &new_signers);
+    }
+
+    pub fn get_oracle_signers(env: Env) -> Vec<Address> {
+        env.storage().instance()
+            .get(&DataKey::OracleSigners)
+            .unwrap_or_else(|| panic_with_error!(&env, Error::NotInitialized))
     }
 
     pub fn auto_top_up(env: Env, importer: Address) -> i128 {
         let mut acct = load_account(&env, &importer);
         require_active(&env, &acct);
-        let shortfall = acct.required_collateral - acct.collateral_balance;
+        // #336 — during an active dispute use the pre-dispute value so auto-top-up
+        // does not force the importer to fund the disputed (higher) requirement.
+        let effective_required = effective_required(&acct);
+        let shortfall = effective_required - acct.collateral_balance;
         if shortfall <= 0 || acct.reserve_balance <= 0 {
             return 0;
         }
@@ -178,7 +363,11 @@ impl TariffShieldContract {
         }
         let mut acct = load_account(&env, &importer);
         require_active(&env, &acct);
-        let excess = acct.collateral_balance - acct.required_collateral;
+        require_fresh_collateral(&env, &importer, &acct);
+        // #336 — during an active dispute enforce the pre-dispute (lower) required value,
+        // letting the importer withdraw excess they would not be forced to lock under dispute.
+        let req = effective_required(&acct);
+        let excess = acct.collateral_balance - req;
         if amount > excess {
             panic_with_error!(&env, Error::CollateralBelowRequired);
         }
@@ -235,6 +424,55 @@ impl TariffShieldContract {
         env.events()
             .publish((symbol_short!("clawback"), importer.clone()), total);
         total
+    }
+
+    // #336 — importer formally contests the most recent oracle-set required_collateral.
+    // Must be called within the 72-hour dispute window opened by set_required_collateral.
+    // While dispute_raised is true, enforce uses pre_dispute_required instead of
+    // required_collateral, preventing the importer from being locked out while admin reviews.
+    pub fn raise_dispute(env: Env, importer: Address) {
+        importer.require_auth();
+        let mut acct = load_account(&env, &importer);
+        require_active(&env, &acct);
+        let current_ts = env.ledger().timestamp();
+        if acct.dispute_expires_at == 0 || current_ts >= acct.dispute_expires_at {
+            panic_with_error!(&env, Error::NoDisputeWindow);
+        }
+        if acct.dispute_raised {
+            panic_with_error!(&env, Error::DisputeAlreadyRaised);
+        }
+        acct.dispute_raised = true;
+        save_account(&env, &importer, &acct);
+        env.events().publish(
+            (symbol_short!("dispute"), importer.clone()),
+            (acct.pre_dispute_required, acct.required_collateral),
+        );
+    }
+
+    // #336 — platform admin resolves an open dispute.
+    // accept=true: the new oracle value stands; accept=false: revert to pre-dispute value.
+    pub fn resolve_dispute(env: Env, importer: Address, accept: bool) {
+        let admin = get_admin(&env);
+        admin.require_auth();
+        let mut acct = load_account(&env, &importer);
+        if !acct.dispute_raised {
+            panic_with_error!(&env, Error::NoActiveDispute);
+        }
+        if !accept {
+            acct.required_collateral = acct.pre_dispute_required;
+        }
+        acct.dispute_raised = false;
+        acct.dispute_expires_at = 0;
+        save_account(&env, &importer, &acct);
+        env.events().publish(
+            (symbol_short!("disprsol"), importer.clone()),
+            (accept, acct.required_collateral),
+        );
+    }
+
+    // #331 — return the rolling on-chain history of the last 12 required_collateral values.
+    pub fn get_collateral_history(env: Env, importer: Address) -> Vec<CollateralHistoryEntry> {
+        load_account(&env, &importer).collateral_history
     }
 
     pub fn propose_upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) -> u64 {
@@ -303,6 +541,11 @@ impl TariffShieldContract {
         load_account(&env, &importer)
     }
 
+    pub fn is_collateral_stale(env: Env, account_id: Address) -> bool {
+        let acct = load_account(&env, &account_id);
+        is_stale(&env, &acct)
+    }
+
     pub fn get_admin(env: Env) -> Address {
         get_admin(&env)
     }
@@ -313,8 +556,62 @@ impl TariffShieldContract {
         get_token(&env)
     }
 
+    // #339 — view the current oracle admin address
+    pub fn get_oracle_admin(env: Env) -> Address {
+        get_oracle_admin(&env)
+    }
+
+    // #339 — general admin can rotate the oracle admin key (e.g. after compromise)
+    pub fn rotate_oracle_admin(env: Env, caller: Address, new_oracle_admin: Address) {
+        require_admin(&env, &caller);
+        caller.require_auth();
+        new_oracle_admin.require_auth();
+        env.storage().instance().set(&DataKey::OracleAdmin, &new_oracle_admin);
+        env.events().publish(
+            (symbol_short!("oraclrot"), new_oracle_admin.clone()),
+            (),
+        );
+    }
+
+    pub fn migrate_account(env: Env, admin: Address, importer: Address, new_account: Account) {
+        require_admin(&env, &admin);
+        admin.require_auth();
+        save_account(&env, &importer, &new_account);
+        env.events().publish(
+            (symbol_short!("migrat"), importer.clone()),
+            new_account.bond_id,
+        );
+    }
+
+    pub fn set_price_oracle(env: Env, oracle: Address) {
+        let admin = get_admin(&env);
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::PriceOracle, &oracle);
+        env.events().publish((symbol_short!("oracle"), oracle.clone()), ());
+    }
+
+    pub fn get_price_oracle(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::PriceOracle)
+    }
+
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        let admin = get_admin(&env);
+        admin.require_auth();
+        let old_version = env.storage()
+            .instance()
+            .get::<_, Symbol>(&DataKey::Version)
+            .unwrap_or_else(|| symbol_short!("v0_2_0"));
+        env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
+        let new_version = symbol_short!("v0_3_0");
+        env.storage().instance().set(&DataKey::Version, &new_version);
+        env.events().publish(
+            (symbol_short!("upgrade"), new_wasm_hash),
+            (old_version, new_version, env.ledger().timestamp()),
+        );
+    }
+
     pub fn version() -> Symbol {
-        symbol_short!("v0_1_0")
+        symbol_short!("v0_3_0")
     }
 }
 
@@ -366,5 +663,56 @@ fn save_account(env: &Env, importer: &Address, acct: &Account) {
 fn require_active(env: &Env, acct: &Account) {
     if acct.is_clawbacked {
         panic_with_error!(env, Error::AccountFrozen);
+    }
+}
+
+fn is_stale(env: &Env, acct: &Account) -> bool {
+    env.ledger().timestamp() > acct.collateral_last_updated + 365 * 86400
+}
+
+fn require_fresh_collateral(env: &Env, importer: &Address, acct: &Account) {
+    if is_stale(env, acct) {
+        let expiry = acct.collateral_last_updated + 365 * 86400;
+        env.events().publish((symbol_short!("stale"), importer.clone()), expiry);
+        panic_with_error!(env, Error::StaleOracleError);
+    }
+}
+
+fn get_oracle_admin(env: &Env) -> Address {
+    env.storage()
+        .instance()
+        .get(&DataKey::OracleAdmin)
+        .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized))
+}
+
+fn get_emergency_oracle_admin(env: &Env) -> Address {
+    env.storage()
+        .instance()
+        .get(&DataKey::EmergencyOracleAdmin)
+        .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized))
+}
+
+fn get_price_oracle_optional(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::PriceOracle)
+}
+
+fn get_usdc_usd_rate(env: &Env, oracle: &Address) -> i128 {
+    let rate: i128 = env
+        .invoke_contract(
+            oracle,
+            &Symbol::new(env, "get_usdc_usd_rate"),
+            soroban_sdk::Vec::new(env),
+        );
+    rate
+}
+
+// #336 — returns the required_collateral value currently in force for enforcement.
+// During an active dispute the pre-dispute (lower) value is used so the importer
+// is not locked out while admin review is pending.
+fn effective_required(acct: &Account) -> i128 {
+    if acct.dispute_raised {
+        acct.pre_dispute_required
+    } else {
+        acct.required_collateral
     }
 }

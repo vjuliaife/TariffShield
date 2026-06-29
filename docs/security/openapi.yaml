@@ -1,0 +1,364 @@
+openapi: 3.0.3
+info:
+  title: TariffShield API
+  description: API for managing customs-bond collateral and importer/surety auth
+  version: 1.0.0
+servers:
+  - url: http://localhost:3002
+paths:
+  /auth/signup:
+    post:
+      summary: Importer or Surety Sign Up
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - password
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  minimum: 8
+                role:
+                  type: string
+                  enum: [importer, surety_admin]
+                  default: importer
+                privacyPolicyVersionId:
+                  type: string
+      responses:
+        '200':
+          description: Successful signup
+        '400':
+          description: Invalid input
+        '409':
+          description: Email already registered
+
+  /auth/login:
+    post:
+      summary: User Login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - password
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+      responses:
+        '200':
+          description: Successful login
+        '400':
+          description: Invalid input
+        '401':
+          description: Invalid credentials
+        '429':
+          description: Too many attempts
+
+  /auth/me:
+    get:
+      summary: Get current authenticated user
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Current user info
+        '401':
+          description: Unauthorized
+
+  /auth/saml/metadata:
+    get:
+      summary: Get SP SAML metadata
+      responses:
+        '200':
+          description: SAML Metadata XML
+
+  /auth/saml/{provider}/login:
+    get:
+      summary: Initiate SAML login
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [okta, azure]
+      responses:
+        '302':
+          description: Redirect to IdP
+
+  /auth/saml/{provider}/callback:
+    post:
+      summary: SAML assertion consumer service callback
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [okta, azure]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - SAMLResponse
+              properties:
+                SAMLResponse:
+                  type: string
+      responses:
+        '200':
+          description: Token issued
+        '302':
+          description: Redirect with token
+
+  /importers:
+    get:
+      summary: List registered importers
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of importers
+    post:
+      summary: Register a new importer
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - legalName
+                - bondId
+                - initialRequiredCollateral
+              properties:
+                legalName:
+                  type: string
+                ein:
+                  type: string
+                bondId:
+                  type: integer
+                initialRequiredCollateral:
+                  type: string
+      responses:
+        '200':
+          description: Importer registered
+        '403':
+          description: Forbidden or blocked by AML/OFAC
+
+  /importers/{id}:
+    get:
+      summary: Get importer detail and on-chain account
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Detailed importer info
+        '404':
+          description: Importer not found
+
+  /importers/{id}/collateral-status:
+    get:
+      summary: Get bond staleness and expiration
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Collateral status
+
+  /importers/{id}/upload-tariff-csv:
+    post:
+      summary: Upload duty exposure to recompute required collateral
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - lineItems
+              properties:
+                filename:
+                  type: string
+                lineItems:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - htsCode
+                      - value
+                      - dutyRate
+                    properties:
+                      htsCode:
+                        type: string
+                      value:
+                        type: number
+                      dutyRate:
+                        type: number
+      responses:
+        '200':
+          description: Required collateral updated
+
+  /importers/{id}/deposit:
+    post:
+      summary: Deposit to collateral or reserve
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - amountStroops
+                - bucket
+              properties:
+                amountStroops:
+                  type: string
+                bucket:
+                  type: string
+                  enum: [collateral, reserve]
+      responses:
+        '200':
+          description: Deposit confirmed
+
+  /importers/{id}/auto-top-up:
+    post:
+      summary: Permissionless auto-top-up trigger
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Auto top up complete
+
+  /importers/{id}/withdraw:
+    post:
+      summary: Withdraw collateral
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - amountStroops
+              properties:
+                amountStroops:
+                  type: string
+      responses:
+        '200':
+          description: Withdrawal complete
+
+  /importers/{id}/accrue-yield:
+    post:
+      summary: Accrue simulated yield
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - amountStroops
+              properties:
+                amountStroops:
+                  type: string
+      responses:
+        '200':
+          description: Yield accrued
+
+  /importers/{id}/clawback:
+    post:
+      summary: Surety clawback trigger
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Clawback executed
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
