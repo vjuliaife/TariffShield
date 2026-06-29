@@ -36,6 +36,9 @@ pub enum DataKey {
     OracleAdmin,
     EmergencyOracleAdmin,
     HasUpdated(Address),
+    // oracle multi-sig state
+    OracleSigners,
+    OracleThreshold,
 }
 
 #[contracttype]
@@ -104,7 +107,8 @@ impl TariffShieldContract {
         env.storage().instance().set(&DataKey::OracleAdmin, &oracle_admin);
         env.storage().instance().set(&DataKey::EmergencyOracleAdmin, &emergency_oracle_admin);
         env.storage().instance().set(&DataKey::ProposalCounter, &0u64);
-        env.storage().instance().set(&DataKey::OracleSigners, &oracle_signers);
+        let empty_signers: Vec<Address> = Vec::new(&env);
+        env.storage().instance().set(&DataKey::OracleSigners, &empty_signers);
         env.storage().instance().set(&DataKey::OracleThreshold, &2u32);
     }
 
@@ -570,6 +574,25 @@ impl TariffShieldContract {
         env.events().publish(
             (symbol_short!("oraclrot"), new_oracle_admin.clone()),
             (),
+        );
+    }
+
+    /// Transfer the platform admin role to a new address.
+    /// The current admin must authorize the call; the new admin is written to
+    /// persistent storage and an `admin_transferred` event is emitted containing
+    /// the old address, new address, and block timestamp.
+    pub fn transfer_admin(env: Env, new_admin: Address) {
+        let old_admin = get_admin(&env);
+        old_admin.require_auth();
+
+        // Build a single-element admins vec and overwrite storage.
+        let mut new_admins: Vec<Address> = Vec::new(&env);
+        new_admins.push_back(new_admin.clone());
+        env.storage().instance().set(&DataKey::Admins, &new_admins);
+
+        env.events().publish(
+            (Symbol::new(&env, "admin_transferred"), old_admin.clone()),
+            (old_admin, new_admin, env.ledger().timestamp()),
         );
     }
 
