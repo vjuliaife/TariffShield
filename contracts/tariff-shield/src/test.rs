@@ -593,3 +593,58 @@ fn auto_top_up_during_dispute_uses_pre_dispute_required() {
     assert_eq!(acct.collateral_balance, 50_000_0000000);
     assert_eq!(acct.reserve_balance, 10_000_0000000);
 }
+
+// ── transfer_admin ─────────────────────────────────────────────────────────────
+
+#[test]
+fn transfer_admin_updates_admin_and_emits_event() {
+    let s = setup();
+    let new_admin = Address::generate(&s.env);
+    s.client.transfer_admin(&new_admin);
+    assert_eq!(s.client.get_admin(), new_admin);
+}
+
+/// A non-admin caller cannot invoke transfer_admin.
+/// Uses mock_auths to authorize only the intruder — the real admin's require_auth() fails.
+#[test]
+#[should_panic]
+fn non_admin_cannot_transfer_admin() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let surety = Address::generate(&env);
+    let oracle_admin = Address::generate(&env);
+    let emergency_oracle_admin = Address::generate(&env);
+    let intruder = Address::generate(&env);
+    let token_addr = env
+        .register_stellar_asset_contract_v2(Address::generate(&env))
+        .address();
+
+    let contract_id = env.register(TariffShieldContract, ());
+    let client = TariffShieldContractClient::new(&env, &contract_id);
+
+    // Initialize under mock_all_auths so setup succeeds.
+    env.mock_all_auths();
+    let mut admins = soroban_sdk::Vec::new(&env);
+    admins.push_back(admin.clone());
+    client.initialize(
+        &admins,
+        &surety,
+        &token_addr,
+        &oracle_admin,
+        &emergency_oracle_admin,
+    );
+
+    // Only authorize `intruder` for the transfer call.
+    // admin.require_auth() inside transfer_admin will not be satisfied → panic.
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &intruder,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "transfer_admin",
+            args: soroban_sdk::vec![&env, intruder.clone().to_val()].into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    client.transfer_admin(&intruder);
+}
