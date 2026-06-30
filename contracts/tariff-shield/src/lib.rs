@@ -9,8 +9,8 @@
 //!   - is_clawbacked          frozen state after surety enforcement
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, panic_with_error, symbol_short, token, Address, BytesN, Env,
-    Symbol, Vec,
+    contract, contractimpl, contracttype, panic_with_error, symbol_short, token, Address, BytesN,
+    Env, Symbol, Vec,
 };
 
 mod errors;
@@ -160,12 +160,22 @@ impl TariffShieldContract {
         env.storage().instance().set(&DataKey::Admins, &admins);
         env.storage().instance().set(&DataKey::Surety, &surety);
         env.storage().instance().set(&DataKey::Token, &token);
-        env.storage().instance().set(&DataKey::OracleAdmin, &oracle_admin);
-        env.storage().instance().set(&DataKey::EmergencyOracleAdmin, &emergency_oracle_admin);
-        env.storage().instance().set(&DataKey::ProposalCounter, &0u64);
+        env.storage()
+            .instance()
+            .set(&DataKey::OracleAdmin, &oracle_admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::EmergencyOracleAdmin, &emergency_oracle_admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::ProposalCounter, &0u64);
         let empty_signers: Vec<Address> = Vec::new(&env);
-        env.storage().instance().set(&DataKey::OracleSigners, &empty_signers);
-        env.storage().instance().set(&DataKey::OracleThreshold, &2u32);
+        env.storage()
+            .instance()
+            .set(&DataKey::OracleSigners, &empty_signers);
+        env.storage()
+            .instance()
+            .set(&DataKey::OracleThreshold, &2u32);
     }
 
     /// Registers a new importer and creates a zero-balance escrow account.
@@ -416,10 +426,8 @@ impl TariffShieldContract {
         if !bypass_rate_limit && !emergency && acct.oracle_last_updated > 0 {
             if current_timestamp < acct.oracle_last_updated + cooldown_seconds {
                 let retry_after = acct.oracle_last_updated + cooldown_seconds;
-                env.events().publish(
-                    (symbol_short!("ratelimit"), importer.clone()),
-                    retry_after,
-                );
+                env.events()
+                    .publish((symbol_short!("ratelimit"), importer.clone()), retry_after);
                 panic_with_error!(&env, Error::RateLimitExceededError);
             }
         }
@@ -439,10 +447,8 @@ impl TariffShieldContract {
         };
 
         if oracle_rate < 9800 || oracle_rate > 10200 {
-            env.events().publish(
-                (symbol_short!("depeg"), importer.clone()),
-                oracle_rate,
-            );
+            env.events()
+                .publish((symbol_short!("depeg"), importer.clone()), oracle_rate);
         }
 
         let old_required = acct.required_collateral;
@@ -508,10 +514,16 @@ impl TariffShieldContract {
         if new_signers.len() != 3 {
             panic_with_error!(&env, Error::InvalidSignatureSet);
         }
-        let oracle_signers: Vec<Address> = env.storage().instance()
+        let oracle_signers: Vec<Address> = env
+            .storage()
+            .instance()
             .get(&DataKey::OracleSigners)
             .unwrap_or_else(|| panic_with_error!(&env, Error::NotInitialized));
-        let threshold: u32 = env.storage().instance().get(&DataKey::OracleThreshold).unwrap_or(2u32);
+        let threshold: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::OracleThreshold)
+            .unwrap_or(2u32);
 
         let mut seen = Vec::new(&env);
         let mut valid_count: u32 = 0;
@@ -528,7 +540,9 @@ impl TariffShieldContract {
         if valid_count < threshold {
             panic_with_error!(&env, Error::InsufficientSignatures);
         }
-        env.storage().instance().set(&DataKey::OracleSigners, &new_signers);
+        env.storage()
+            .instance()
+            .set(&DataKey::OracleSigners, &new_signers);
     }
 
     /// Returns the list of currently authorized oracle signers.
@@ -539,7 +553,8 @@ impl TariffShieldContract {
     /// # Returns
     /// A vector containing the addresses of the authorized oracle signers.
     pub fn get_oracle_signers(env: Env) -> Vec<Address> {
-        env.storage().instance()
+        env.storage()
+            .instance()
             .get(&DataKey::OracleSigners)
             .unwrap_or_else(|| panic_with_error!(&env, Error::NotInitialized))
     }
@@ -832,9 +847,15 @@ impl TariffShieldContract {
         require_admin(&env, &caller);
         caller.require_auth();
 
-        let counter: u64 = env.storage().instance().get(&DataKey::ProposalCounter).unwrap_or(0);
+        let counter: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ProposalCounter)
+            .unwrap_or(0);
         let proposal_id = counter + 1;
-        env.storage().instance().set(&DataKey::ProposalCounter, &proposal_id);
+        env.storage()
+            .instance()
+            .set(&DataKey::ProposalCounter, &proposal_id);
 
         let mut approvals = Vec::new(&env);
         approvals.push_back(caller.clone());
@@ -846,7 +867,9 @@ impl TariffShieldContract {
             approvals,
             expiry_ledger,
         };
-        env.storage().persistent().set(&DataKey::Proposal(proposal_id), &proposal);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Proposal(proposal_id), &proposal);
 
         proposal_id
     }
@@ -871,9 +894,11 @@ impl TariffShieldContract {
         caller.require_auth();
 
         let key = DataKey::Proposal(proposal_id);
-        let mut proposal: Proposal = env.storage().persistent().get(&key).unwrap_or_else(|| {
-            panic_with_error!(&env, Error::ProposalNotFound)
-        });
+        let mut proposal: Proposal = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(&env, Error::ProposalNotFound));
 
         if env.ledger().sequence() > proposal.expiry_ledger {
             env.storage().persistent().remove(&key);
@@ -887,7 +912,8 @@ impl TariffShieldContract {
         proposal.approvals.push_back(caller);
 
         if proposal.approvals.len() >= 2 {
-            env.deployer().update_current_contract_wasm(proposal.new_wasm_hash);
+            env.deployer()
+                .update_current_contract_wasm(proposal.new_wasm_hash);
             env.storage().persistent().remove(&key);
         } else {
             env.storage().persistent().set(&key, &proposal);
@@ -1001,11 +1027,11 @@ impl TariffShieldContract {
         require_admin(&env, &caller);
         caller.require_auth();
         new_oracle_admin.require_auth();
-        env.storage().instance().set(&DataKey::OracleAdmin, &new_oracle_admin);
-        env.events().publish(
-            (symbol_short!("oraclrot"), new_oracle_admin.clone()),
-            (),
-        );
+        env.storage()
+            .instance()
+            .set(&DataKey::OracleAdmin, &new_oracle_admin);
+        env.events()
+            .publish((symbol_short!("oraclrot"), new_oracle_admin.clone()), ());
     }
 
     /// Transfers the platform admin role to a new address.
@@ -1063,7 +1089,8 @@ impl TariffShieldContract {
         let admin = get_admin(&env);
         admin.require_auth();
         env.storage().instance().set(&DataKey::PriceOracle, &oracle);
-        env.events().publish((symbol_short!("oracle"), oracle.clone()), ());
+        env.events()
+            .publish((symbol_short!("oracle"), oracle.clone()), ());
     }
 
     /// Returns the optional price oracle contract address.
@@ -1087,13 +1114,17 @@ impl TariffShieldContract {
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
         let admin = get_admin(&env);
         admin.require_auth();
-        let old_version = env.storage()
+        let old_version = env
+            .storage()
             .instance()
             .get::<_, Symbol>(&DataKey::Version)
             .unwrap_or_else(|| symbol_short!("v0_2_0"));
-        env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
+        env.deployer()
+            .update_current_contract_wasm(new_wasm_hash.clone());
         let new_version = symbol_short!("v0_3_0");
-        env.storage().instance().set(&DataKey::Version, &new_version);
+        env.storage()
+            .instance()
+            .set(&DataKey::Version, &new_version);
         env.events().publish(
             (symbol_short!("upgrade"), new_wasm_hash),
             (old_version, new_version, env.ledger().timestamp()),
@@ -1111,7 +1142,8 @@ impl TariffShieldContract {
 
 /// Retrieves the primary platform administrator address from instance storage.
 fn get_admin(env: &Env) -> Address {
-    let admins: Vec<Address> = env.storage()
+    let admins: Vec<Address> = env
+        .storage()
         .instance()
         .get(&DataKey::Admins)
         .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized));
@@ -1120,7 +1152,8 @@ fn get_admin(env: &Env) -> Address {
 
 /// Asserts that the specified address is an authorized platform administrator.
 fn require_admin(env: &Env, caller: &Address) {
-    let admins: Vec<Address> = env.storage()
+    let admins: Vec<Address> = env
+        .storage()
         .instance()
         .get(&DataKey::Admins)
         .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized));
@@ -1176,7 +1209,8 @@ fn is_stale(env: &Env, acct: &Account) -> bool {
 fn require_fresh_collateral(env: &Env, importer: &Address, acct: &Account) {
     if is_stale(env, acct) {
         let expiry = acct.collateral_last_updated + 365 * 86400;
-        env.events().publish((symbol_short!("stale"), importer.clone()), expiry);
+        env.events()
+            .publish((symbol_short!("stale"), importer.clone()), expiry);
         panic_with_error!(env, Error::StaleOracleError);
     }
 }
@@ -1204,12 +1238,11 @@ fn get_price_oracle_optional(env: &Env) -> Option<Address> {
 
 /// Invokes the external price oracle contract to fetch the current USDC/USD rate.
 fn get_usdc_usd_rate(env: &Env, oracle: &Address) -> i128 {
-    let rate: i128 = env
-        .invoke_contract(
-            oracle,
-            &Symbol::new(env, "get_usdc_usd_rate"),
-            soroban_sdk::Vec::new(env),
-        );
+    let rate: i128 = env.invoke_contract(
+        oracle,
+        &Symbol::new(env, "get_usdc_usd_rate"),
+        soroban_sdk::Vec::new(env),
+    );
     rate
 }
 
