@@ -77,6 +77,44 @@ To ensure a rapid response to security threats, TariffShield enforces the follow
 
 ---
 
-## 4. Reporting a Security Vulnerability
+## 4. CodeQL Static Analysis (SAST)
+
+GitHub's CodeQL scans every pull request and runs a weekly full-repo baseline on Mondays at 03:00 UTC.
+
+### Configuration
+
+| Setting | Value |
+|---------|-------|
+| Workflow | `.github/workflows/codeql.yml` |
+| Config file | `.github/codeql/codeql-config.yml` |
+| Query suite | `security-and-quality` (catches both security vulnerabilities and code-quality issues) |
+| Languages | `javascript-typescript` |
+| Schedule | Weekly — Monday 03:00 UTC |
+| PR trigger | Every pull request targeting `main` or `master` |
+
+The config file excludes `node_modules`, `dist`, `.next`, and generated files to reduce false positives.
+
+### Viewing alerts
+
+Code scanning alerts appear in **Security → Code scanning alerts** in the GitHub repository. Each alert includes:
+
+- The vulnerable code location and a description of the issue
+- A severity level (`error`, `warning`, `note`, or `recommendation`)
+- A suggested fix where available
+
+### Triaging alerts
+
+Before closing an alert as a false positive or "won't fix":
+
+1. Reproduce the potential attack path in a local environment.
+2. Confirm whether the code path is reachable from an untrusted input source.
+3. If the alert is a genuine false positive, dismiss it with the reason **False positive** and add a comment explaining why.
+4. If the issue is real, open a remediation PR and reference the alert URL in the PR description.
+
+Alerts of severity **error** automatically fail the PR code-scanning check. **Warning** level alerts appear as annotations but do not block merge.
+
+---
+
+## 5. Reporting a Security Vulnerability
 
 If you discover a security vulnerability in TariffShield, do not open a public GitHub issue. Instead, please report it privately via email to `security@tariffshield.com` or follow our coordinated disclosure policy.

@@ -162,3 +162,34 @@ To deploy or re-deploy the TariffShield contract to Stellar Testnet for staging:
      --emergency_oracle_admin "<STAGING_EMERGENCY_ORACLE_ADMIN_PUBLIC_KEY>"
    ```
 
+## Container Registry (GHCR)
+
+Every merge to `main` automatically builds the Express API and pushes a Docker image to GitHub Container Registry.
+
+### Image URL format
+
+```
+ghcr.io/<owner>/tariffshield-api:latest
+ghcr.io/<owner>/tariffshield-api:<short-sha>
+```
+
+Where `<owner>` is the GitHub organisation or user that owns the repository (lower-cased) and `<short-sha>` is the first 7 characters of the merge commit SHA.
+
+### Pulling on Render instead of building from source
+
+1. In the Render service settings, switch **Deploy** from **Git** to **Docker image**.
+2. Set the image URL to `ghcr.io/<owner>/tariffshield-api:latest`.
+3. Because the image is public on GHCR, Render can pull it without additional credentials.
+4. On every merge, the `.github/workflows/docker-publish.yml` workflow pushes a new `latest` tag. Trigger a Render redeploy manually or connect a Render deploy hook to the workflow.
+
+### Rolling back to a previous image
+
+Each push also tags the image with the short commit SHA. To roll back:
+
+```bash
+# In Render dashboard → Settings → Docker Image, set the image to the previous SHA tag:
+ghcr.io/<owner>/tariffshield-api:<previous-sha>
+```
+
+Or redeploy from the Render **Events** tab as described in the rollback section above.
+

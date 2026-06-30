@@ -1,0 +1,63 @@
+name: API Integration Tests
+
+on:
+  pull_request:
+    branches: [main, master]
+  push:
+    branches: [main, master]
+
+jobs:
+  api-integration:
+    name: api-integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: tariffshield_test
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://test:test@localhost:5432/tariffshield_test
+      NODE_ENV: test
+      JWT_SECRET: ci-stub-jwt-secret-not-used-by-migrations-0000
+      STELLAR_RPC_URL: https://soroban-testnet.stellar.org
+      STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
+      STELLAR_NETWORK_PASSPHRASE: "Test SDF Network ; September 2015"
+      TARIFF_SHIELD_CONTRACT_ID: CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+      PLATFORM_STELLAR_SECRET: SAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB
+      SURETY_STELLAR_SECRET: SAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAC
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Run database migrations
+        run: npm run db:migrate --workspace=apps/api
+
+      - name: Run integration tests
+        run: npm run test:integration --workspace=apps/api
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-integration-test-results
+          path: apps/api/test-results.xml
+          if-no-files-found: warn
