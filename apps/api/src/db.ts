@@ -445,6 +445,37 @@ export async function migrate(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_collateral_disputes_importer
       ON collateral_disputes(importer_id, raised_at DESC);
 
+    -- Oracle price feed: durable audit trail of every set_required_collateral event.
+    CREATE TABLE IF NOT EXISTS oracle_price_feed (
+      id                   UUID          PRIMARY KEY DEFAULT uuid_generate_v4(),
+      importer_id          UUID          REFERENCES importers(id) ON DELETE SET NULL,
+      importer_address     TEXT          NOT NULL,
+      required_collateral  NUMERIC(20,7) NOT NULL,
+      previous_collateral  NUMERIC(20,7) NOT NULL DEFAULT 0,
+      pct_change           NUMERIC(7,4)  NOT NULL DEFAULT 0,
+      tx_hash              VARCHAR(64)   NOT NULL,
+      ledger_sequence      INTEGER       NOT NULL,
+      set_by               VARCHAR(64)   NOT NULL DEFAULT '',
+      emergency_override   BOOLEAN       NOT NULL DEFAULT FALSE,
+      created_at           TIMESTAMPTZ   NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_oracle_price_feed_importer
+      ON oracle_price_feed(importer_id, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_oracle_price_feed_ledger
+      ON oracle_price_feed(ledger_sequence);
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_oracle_price_feed_tx_importer
+      ON oracle_price_feed(tx_hash, importer_address);
+
+    -- Checkpoint for the oracle event listener (resume after downtime).
+    CREATE TABLE IF NOT EXISTS listener_state (
+      id                   TEXT         PRIMARY KEY,
+      last_ledger_sequence INTEGER      NOT NULL,
+      updated_at           TIMESTAMPTZ  NOT NULL DEFAULT now()
+    );
+
     -- #306 SOC 2 CC6: server-side session table for 15-min inactivity timeout and
     -- concurrent session limits. Sessions are created on login and revoked on logout.
     CREATE TABLE IF NOT EXISTS user_sessions (
@@ -459,6 +490,32 @@ export async function migrate(): Promise<void> {
 
     CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id
       ON user_sessions(user_id) WHERE revoked_at IS NULL;
+
+    CREATE TABLE IF NOT EXISTS surety_state_licenses (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      surety_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      state_code TEXT NOT NULL,
+      license_number TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (surety_id, state_code)
+    );
+
+    CREATE TABLE IF NOT EXISTS regulatory_report_audit_logs (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      surety_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      state_code TEXT NOT NULL,
+      start_date DATE NOT NULL,
+      end_date DATE NOT NULL,
+      output_format TEXT NOT NULL,
+      generated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_surety_state_licenses_surety ON surety_state_licenses(surety_id, state_code);
+    CREATE INDEX IF NOT EXISTS idx_regulatory_report_audit_logs_surety ON regulatory_report_audit_logs(surety_id, generated_at DESC);
+
+    ALTER TABLE bond_records ADD COLUMN IF NOT EXISTS state_code TEXT NOT NULL DEFAULT 'CA';
+    ALTER TABLE importers ADD COLUMN IF NOT EXISTS business_state TEXT NOT NULL DEFAULT 'CA';
   `,
     undefined,
     "migrate_schema",
@@ -501,14 +558,13 @@ export async function ping(): Promise<void> {
  * Returns all bonds that have been registered on-chain.
  */
 export async function getActiveBonds(): Promise<{ bondId: string; stellarAddress: string; dbBalance: string }[]> {
-  const result = await pool.query(
+  const result = await pool.query<{ bond_id: string; stellar_address: string; collateral_balance: string }>(
     "SELECT bond_id, stellar_address, collateral_balance FROM importers WHERE registered_on_chain_tx IS NOT NULL"
   );
   return result.rows.map((row) => ({
     bondId: row.bond_id,
     stellarAddress: row.stellar_address,
     dbBalance: row.collateral_balance,
-    stellarAddress: row.stellar_address,
   }));
 }
 

@@ -1,0 +1,29 @@
+# cargo-deny configuration for TariffShield
+
+[graph]
+# Do not filter graph by target unless necessary
+targets = []
+
+[advisories]
+db-urls = ["https://github.com/RustSec/advisory-db"]
+# Fail on any security advisories (note: we use cargo-audit for primary vulnerability scanning)
+vulnerability = "deny"
+
+[licenses]
+# Treat unlicensed packages as failures
+unlicensed = "deny"
+# The list of allowed licenses for all dependencies (direct and transitive)
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "ISC",
+]
+# Confidence threshold for license detection (0.8 is standard and reliable)
+confidence-threshold = 0.8
+
+[bans]
+# Block duplicate crate versions in the dependency tree to prevent bloated binaries and version conflicts
+multiple-versions = "deny"
+# Allow list/skip list for specific duplicates can be added below if necessary
+skip = []
+skip-tree = []
