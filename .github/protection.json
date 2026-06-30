@@ -8,6 +8,7 @@
       "CI / audit",
       "CI / api-integration",
       "CodeQL / analyze",
+      "PR Size / Check PR diff size",
       "Vercel Preview / deploy"
     ]
   },

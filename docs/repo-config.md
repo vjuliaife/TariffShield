@@ -29,6 +29,7 @@ These workflow jobs must pass before a PR can merge:
 | `CI / audit` | `.github/workflows/ci.yml` | `audit` |
 | `CI / api-integration` | `.github/workflows/ci.yml` | `api-integration` |
 | `CodeQL / analyze` | `.github/workflows/codeql.yml` | `analyze` |
+| `PR Size / Check PR diff size` | `.github/workflows/pr-size.yml` | `Check PR diff size` |
 | `Vercel Preview / deploy` | `.github/workflows/preview-deploy.yml` | `deploy` |
 
 ## Restoring branch protection via `gh` CLI
