@@ -200,6 +200,26 @@ Start the API (`npm run dev:api`) then open [http://localhost:3002/docs](http://
 
 The spec covers all 30+ routes across Auth, Importers, KYC, Compliance, Surety License, and Health, with request/response schemas and JWT security requirements on each protected route.
 
+## Code Style
+
+All TypeScript packages are linted with [ESLint](https://eslint.org/) and formatted with [Prettier](https://prettier.io/). A shared config at `packages/eslint-config` is extended by each workspace.
+
+```bash
+# Check lint in all workspaces
+npm run lint --workspaces --if-present
+
+# Auto-fix lint issues in a specific workspace
+npm run lint:fix --workspace=apps/api
+
+# Check formatting across all workspaces
+npm run format:check --workspaces --if-present
+
+# Apply formatting in a specific workspace
+npm run format --workspace=packages/sdk
+```
+
+CI enforces `--max-warnings 0` on every pull request via the **Lint** workflow (`.github/workflows/lint.yml`). Any ESLint warning blocks the merge. `// eslint-disable` directives require an explanatory inline note.
+
 ## Changelog
 
 See [CHANGELOG.md](./CHANGELOG.md) for a full history of releases following the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
