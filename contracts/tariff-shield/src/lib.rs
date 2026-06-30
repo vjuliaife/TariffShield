@@ -18,73 +18,129 @@ mod test;
 
 pub use errors::Error;
 
+/// The main TariffShield contract structure.
 #[contract]
 pub struct TariffShieldContract;
 
+/// Storage keys for the contract's persistent and instance storage.
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
+    /// Vector of platform admin addresses.
     Admins,
+    /// The surety admin address with clawback capability.
     Surety,
+    /// The SAC token contract address used for collateral.
     Token,
+    /// Per-importer account state, keyed by importer address.
     Account(Address),
+    /// Upgrade proposal state, keyed by proposal ID.
     Proposal(u64),
+    /// Counter for generating unique upgrade proposal IDs.
     ProposalCounter,
+    /// Address of the price oracle contract.
     PriceOracle,
+    /// Current contract version.
     Version,
-    // #339 — dedicated oracle role; can set_required_collateral but not upgrade/register
+    /// Dedicated oracle administrator address.
     OracleAdmin,
+    /// Emergency oracle administrator address.
     EmergencyOracleAdmin,
+    /// Tracks whether an address has updated.
     HasUpdated(Address),
-    // oracle multi-sig state
+    /// Vector of authorized oracle signers.
     OracleSigners,
+    /// Threshold of approvals required to update oracle signers.
     OracleThreshold,
 }
 
+/// Represents a proposed contract WASM upgrade.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Proposal {
+    /// The WASM hash of the proposed new contract code.
     pub new_wasm_hash: BytesN<32>,
+    /// List of admin addresses who have approved the upgrade.
     pub approvals: Vec<Address>,
+    /// Ledger sequence number at which the proposal expires.
     pub expiry_ledger: u32,
 }
 
-// #331 — one entry in the rolling on-chain audit trail
+/// Represents a single historical record in the required collateral audit trail.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CollateralHistoryEntry {
+    /// The required collateral value in stroops.
     pub value: i128,
+    /// The ledger timestamp when the value was set.
     pub timestamp: u64,
 }
 
+/// Represents the escrow and state tracking account for an importer.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Account {
+    /// Unique identifier for the importer's customs bond.
     pub bond_id: u64,
+    /// Active collateral balance currently posted in stroops.
     pub collateral_balance: i128,
+    /// Collateral amount required by the surety in stroops.
     pub required_collateral: i128,
+    /// Auto-top-up reserve balance in stroops.
     pub reserve_balance: i128,
+    /// Simulated accrued yield in stroops.
     pub yield_accrued: i128,
+    /// Flag indicating if the account has been clawed back and frozen.
     pub is_clawbacked: bool,
-    // Updated whenever collateral state changes (for staleness check).
+    /// Ledger timestamp of the last collateral state modification.
     pub collateral_last_updated: u64,
-    // #331 — rolling history of the last 12 oracle-set required_collateral values.
+    /// Rolling history of the last 12 required collateral values.
     pub collateral_history: Vec<CollateralHistoryEntry>,
-    // #336 — 72-hour dispute window fields.
-    // Timestamp until which the importer may raise a dispute (0 = no open window).
+    /// Ledger timestamp when the active dispute window expires.
     pub dispute_expires_at: u64,
-    // The required_collateral value in effect before the last oracle update.
+    /// Pre-dispute required collateral value in stroops.
     pub pre_dispute_required: i128,
-    // True once the importer formally raises a dispute; cleared by resolve_dispute.
+    /// Flag indicating if a formal dispute has been raised by the importer.
     pub dispute_raised: bool,
-    // #326 — tracks the last time the oracle set required_collateral separately from
-    // collateral_last_updated so that the rate-limit window does not count registration.
+    /// Ledger timestamp when the oracle last updated the requirement.
     pub oracle_last_updated: u64,
 }
 
 #[contractimpl]
 impl TariffShieldContract {
-    /// #339 — `oracle_admin` is required auth; set to same as admins[0] if not separate.
+    /// Initializes the contract state and configures administrators, surety, and token roles.
+    ///
+    /// This is a one-shot function and can only be called once. All administrator, oracle,
+    /// and emergency oracle administrators must authorize this call by signing.
+    ///
+    /// # Parameters
+    /// - `env`: The Soroban execution environment.
+    /// - `admins`: A vector of admin addresses who manage the platform. At least one admin is required.
+    /// - `surety`: The address of the surety administrator who possesses clawback capabilities.
+    /// - `token`: The SAC (Stellar Asset Contract) token address used for collateral.
+    /// - `oracle_admin`: The address of the oracle administrator authorized to update required collateral. Set to same as `admins[0]` if not separate.
+    /// - `emergency_oracle_admin`: The address of the emergency oracle admin authorized to bypass rate limits.
+    ///
+    /// # Returns
+    /// This function returns nothing (`()`).
+    ///
+    /// # Panics
+    /// - `Error::AlreadyInitialized`: If the contract has already been initialized.
+    ///
+    /// # Example
+    /// ```bash
+    /// stellar contract invoke \
+    ///   --id CDLZFC3SYJ... \
+    ///   --network testnet \
+    ///   --source admin \
+    ///   -- \
+    ///   initialize \
+    ///   --admins '["GBEB3I..."]' \
+    ///   --surety "GDLZFC..." \
+    ///   --token "CAS3GD..." \
+    ///   --oracle_admin "GBEB3I..." \
+    ///   --emergency_oracle_admin "GDEB3I..."
+    /// ```
     pub fn initialize(
         env: Env,
         admins: Vec<Address>,
@@ -112,6 +168,37 @@ impl TariffShieldContract {
         env.storage().instance().set(&DataKey::OracleThreshold, &2u32);
     }
 
+    /// Registers a new importer and creates a zero-balance escrow account.
+    ///
+    /// This function must be authorized by a platform administrator.
+    ///
+    /// # Parameters
+    /// - `env`: The Soroban execution environment.
+    /// - `importer`: The Stellar address of the importer being registered.
+    /// - `bond_id`: The unique identifier of the customs bond.
+    /// - `required_collateral`: The initial required collateral amount in stroops. Must be >= 0.
+    ///
+    /// # Returns
+    /// This function returns nothing (`()`).
+    ///
+    /// # Panics
+    /// - `Error::NotInitialized`: If the contract is not initialized.
+    /// - `Error::NotAnAdmin`: If the caller is not a configured platform admin.
+    /// - `Error::InvalidAmount`: If `required_collateral` is negative.
+    /// - `Error::ImporterAlreadyRegistered`: If an account for the importer already exists.
+    ///
+    /// # Example
+    /// ```bash
+    /// stellar contract invoke \
+    ///   --id CDLZFC3SYJ... \
+    ///   --network testnet \
+    ///   --source admin \
+    ///   -- \
+    ///   register_importer \
+    ///   --importer "GDIMPO..." \
+    ///   --bond_id 123456 \
+    ///   --required_collateral 1000000000
+    /// ```
     pub fn register_importer(env: Env, importer: Address, bond_id: u64, required_collateral: i128) {
         let admin = get_admin(&env);
         admin.require_auth();
@@ -145,6 +232,38 @@ impl TariffShieldContract {
         );
     }
 
+    /// Deposits SAC tokens into the importer's active collateral balance.
+    ///
+    /// The depositor (`from`) must authorize the transfer. The contract transfers the tokens
+    /// from the depositor's account to its own address.
+    ///
+    /// # Parameters
+    /// - `env`: The Soroban execution environment.
+    /// - `importer`: The Stellar address of the registered importer.
+    /// - `from`: The Stellar address of the fund source authorizing the deposit.
+    /// - `amount`: The amount of SAC tokens to deposit in stroops. Must be > 0.
+    ///
+    /// # Returns
+    /// This function returns nothing (`()`).
+    ///
+    /// # Panics
+    /// - `Error::InvalidAmount`: If `amount` is <= 0.
+    /// - `Error::ImporterNotRegistered`: If the importer is not registered.
+    /// - `Error::AccountFrozen`: If the importer's account has been clawed back and frozen.
+    /// - `Error::StaleOracleError`: If the importer's collateral data is stale (> 365 days since update).
+    ///
+    /// # Example
+    /// ```bash
+    /// stellar contract invoke \
+    ///   --id CDLZFC3SYJ... \
+    ///   --network testnet \
+    ///   --source importer \
+    ///   -- \
+    ///   deposit_collateral \
+    ///   --importer "GDIMPO..." \
+    ///   --from "GDIMPO..." \
+    ///   --amount 500000000
+    /// ```
     pub fn deposit_collateral(env: Env, importer: Address, from: Address, amount: i128) {
         from.require_auth();
         if amount <= 0 {
@@ -167,6 +286,38 @@ impl TariffShieldContract {
         );
     }
 
+    /// Deposits SAC tokens into the importer's auto-top-up reserve balance.
+    ///
+    /// The depositor (`from`) must authorize the transfer. These funds are held separately
+    /// and can be automatically moved to the collateral balance via `auto_top_up`.
+    ///
+    /// # Parameters
+    /// - `env`: The Soroban execution environment.
+    /// - `importer`: The Stellar address of the registered importer.
+    /// - `from`: The Stellar address of the fund source authorizing the deposit.
+    /// - `amount`: The amount of SAC tokens to deposit in stroops. Must be > 0.
+    ///
+    /// # Returns
+    /// This function returns nothing (`()`).
+    ///
+    /// # Panics
+    /// - `Error::InvalidAmount`: If `amount` is <= 0.
+    /// - `Error::ImporterNotRegistered`: If the importer is not registered.
+    /// - `Error::AccountFrozen`: If the importer's account has been clawed back and frozen.
+    /// - `Error::StaleOracleError`: If the importer's collateral data is stale (> 365 days since update).
+    ///
+    /// # Example
+    /// ```bash
+    /// stellar contract invoke \
+    ///   --id CDLZFC3SYJ... \
+    ///   --network testnet \
+    ///   --source importer \
+    ///   -- \
+    ///   deposit_reserve \
+    ///   --importer "GDIMPO..." \
+    ///   --from "GDIMPO..." \
+    ///   --amount 300000000
+    /// ```
     pub fn deposit_reserve(env: Env, importer: Address, from: Address, amount: i128) {
         from.require_auth();
         if amount <= 0 {
@@ -189,6 +340,47 @@ impl TariffShieldContract {
         );
     }
 
+    /// Updates the required collateral for a registered importer.
+    ///
+    /// This function can be called by the oracle administrator or the emergency oracle administrator.
+    /// By default, updates are rate-limited to once per 24 hours, and requirements cannot increase by
+    /// more than 5x in a single step (unless bypassed/emergency). It also opens a 72-hour dispute window.
+    ///
+    /// # Parameters
+    /// - `env`: The Soroban execution environment.
+    /// - `caller`: The Stellar address of the oracle admin or emergency oracle admin invoking the call.
+    /// - `importer`: The Stellar address of the registered importer.
+    /// - `new_required`: The new required collateral amount in USD/stroops. Must be >= 0.
+    /// - `price_oracle_contract`: Optional price oracle address to fetch the USDC/USD rate for adjustment.
+    /// - `bypass_rate_limit`: If true, bypasses the 24-hour rate limit check.
+    /// - `emergency`: If true, indicates an emergency update (must be signed by the emergency oracle admin).
+    ///
+    /// # Returns
+    /// This function returns nothing (`()`).
+    ///
+    /// # Panics
+    /// - `Error::UnauthorizedEmergencyOverride`: If `emergency` is true but `caller` is not the emergency oracle admin.
+    /// - `Error::UnauthorizedRole`: If `emergency` is false but `caller` is not the oracle admin.
+    /// - `Error::InvalidAmount`: If `new_required` is negative.
+    /// - `Error::ImporterNotRegistered`: If the importer is not registered.
+    /// - `Error::RateLimitExceededError`: If the rate limit is violated and not bypassed.
+    /// - `Error::CollateralCapExceeded`: If the new requirement is more than 5x the previous requirement.
+    ///
+    /// # Example
+    /// ```bash
+    /// stellar contract invoke \
+    ///   --id CDLZFC3SYJ... \
+    ///   --network testnet \
+    ///   --source oracle \
+    ///   -- \
+    ///   set_required_collateral \
+    ///   --caller "GDORAC..." \
+    ///   --importer "GDIMPO..." \
+    ///   --new_required 2000000000 \
+    ///   --price_oracle_contract "CAS3GD..." \
+    ///   --bypass_rate_limit false \
+    ///   --emergency false
+    /// ```
     pub fn set_required_collateral(
         env: Env,
         caller: Address,
@@ -302,6 +494,16 @@ impl TariffShieldContract {
     }
 
     /// Rotate the oracle signer set — requires 2-of-3 from the current signer set.
+    ///
+    /// # Parameters
+    /// - `env`: The Soroban execution environment.
+    /// - `new_signers`: A vector of 3 new signer addresses.
+    /// - `approvals`: A vector of addresses that approve this update.
+    ///
+    /// # Panics
+    /// - `Error::InvalidSignatureSet`: If `new_signers` length is not 3, or if duplicate addresses exist in `approvals`.
+    /// - `Error::InsufficientSignatures`: If the number of valid signatures is less than the threshold.
+    /// - `Error::NotInitialized`: If the contract is not initialized.
     pub fn update_oracle_signers(env: Env, new_signers: Vec<Address>, approvals: Vec<Address>) {
         if new_signers.len() != 3 {
             panic_with_error!(&env, Error::InvalidSignatureSet);
@@ -329,12 +531,45 @@ impl TariffShieldContract {
         env.storage().instance().set(&DataKey::OracleSigners, &new_signers);
     }
 
+    /// Returns the list of currently authorized oracle signers.
+    ///
+    /// # Parameters
+    /// - `env`: The Soroban execution environment.
+    ///
+    /// # Returns
+    /// A vector containing the addresses of the authorized oracle signers.
     pub fn get_oracle_signers(env: Env) -> Vec<Address> {
         env.storage().instance()
             .get(&DataKey::OracleSigners)
             .unwrap_or_else(|| panic_with_error!(&env, Error::NotInitialized))
     }
 
+    /// Automatically transfers funds from the reserve balance to the collateral balance.
+    ///
+    /// This function is permissionless and can be called by anyone. It moves up to the shortfall
+    /// amount from `reserve_balance` to `collateral_balance` to meet the `required_collateral`.
+    ///
+    /// # Parameters
+    /// - `env`: The Soroban execution environment.
+    /// - `importer`: The Stellar address of the registered importer.
+    ///
+    /// # Returns
+    /// An `i128` representing the amount of tokens moved from reserve to collateral in stroops.
+    ///
+    /// # Panics
+    /// - `Error::ImporterNotRegistered`: If the importer is not registered.
+    /// - `Error::AccountFrozen`: If the importer's account has been clawed back.
+    ///
+    /// # Example
+    /// ```bash
+    /// stellar contract invoke \
+    ///   --id CDLZFC3SYJ... \
+    ///   --network testnet \
+    ///   --source any_user \
+    ///   -- \
+    ///   auto_top_up \
+    ///   --importer "GDIMPO..."
+    /// ```
     pub fn auto_top_up(env: Env, importer: Address) -> i128 {
         let mut acct = load_account(&env, &importer);
         require_active(&env, &acct);
@@ -360,6 +595,39 @@ impl TariffShieldContract {
         moved
     }
 
+    /// Withdraws collateral from the importer's account to a specified address.
+    ///
+    /// The importer must authorize this transaction. The withdrawal is rejected if it would
+    /// cause the active collateral balance to fall below the required collateral.
+    ///
+    /// # Parameters
+    /// - `env`: The Soroban execution environment.
+    /// - `importer`: The Stellar address of the registered importer.
+    /// - `to`: The Stellar address receiving the withdrawn tokens.
+    /// - `amount`: The amount of collateral to withdraw in stroops. Must be > 0.
+    ///
+    /// # Returns
+    /// This function returns nothing (`()`).
+    ///
+    /// # Panics
+    /// - `Error::InvalidAmount`: If `amount` is <= 0.
+    /// - `Error::ImporterNotRegistered`: If the importer is not registered.
+    /// - `Error::AccountFrozen`: If the importer's account has been clawed back.
+    /// - `Error::StaleOracleError`: If the importer's collateral data is stale (> 365 days since update).
+    /// - `Error::CollateralBelowRequired`: If the withdrawal would breach the required collateral threshold.
+    ///
+    /// # Example
+    /// ```bash
+    /// stellar contract invoke \
+    ///   --id CDLZFC3SYJ... \
+    ///   --network testnet \
+    ///   --source importer \
+    ///   -- \
+    ///   withdraw_collateral \
+    ///   --importer "GDIMPO..." \
+    ///   --to "GDIMPO..." \
+    ///   --amount 100000000
+    /// ```
     pub fn withdraw_collateral(env: Env, importer: Address, to: Address, amount: i128) {
         importer.require_auth();
         if amount <= 0 {
@@ -389,6 +657,20 @@ impl TariffShieldContract {
         );
     }
 
+    /// Accrues simulated yield to the importer's account.
+    ///
+    /// Must be authorized by a platform administrator.
+    ///
+    /// # Parameters
+    /// - `env`: The Soroban execution environment.
+    /// - `importer`: The Stellar address of the registered importer.
+    /// - `amount`: The yield amount to accrue in stroops. Must be > 0.
+    ///
+    /// # Panics
+    /// - `Error::NotAnAdmin`: If the caller is not a platform admin.
+    /// - `Error::InvalidAmount`: If `amount` is <= 0.
+    /// - `Error::ImporterNotRegistered`: If the importer is not registered.
+    /// - `Error::AccountFrozen`: If the importer's account is clawed back.
     pub fn accrue_yield(env: Env, importer: Address, amount: i128) {
         let admin = get_admin(&env);
         admin.require_auth();
@@ -405,6 +687,32 @@ impl TariffShieldContract {
         );
     }
 
+    /// Liquidates all collateral and reserve balances of an importer to the surety.
+    ///
+    /// Must be authorized by the surety admin. The importer's account is permanently frozen
+    /// (marked as clawed back) after this operation.
+    ///
+    /// # Parameters
+    /// - `env`: The Soroban execution environment.
+    /// - `importer`: The Stellar address of the registered importer.
+    ///
+    /// # Returns
+    /// An `i128` representing the total liquidated amount (collateral + reserve) transferred to the surety in stroops.
+    ///
+    /// # Panics
+    /// - `Error::NotInitialized`: If the contract is not initialized.
+    /// - `Error::ImporterNotRegistered`: If the importer is not registered.
+    ///
+    /// # Example
+    /// ```bash
+    /// stellar contract invoke \
+    ///   --id CDLZFC3SYJ... \
+    ///   --network testnet \
+    ///   --source surety \
+    ///   -- \
+    ///   clawback \
+    ///   --importer "GDIMPO..."
+    /// ```
     pub fn clawback(env: Env, importer: Address) -> i128 {
         let surety = get_surety(&env);
         surety.require_auth();
@@ -430,10 +738,20 @@ impl TariffShieldContract {
         total
     }
 
-    // #336 — importer formally contests the most recent oracle-set required_collateral.
-    // Must be called within the 72-hour dispute window opened by set_required_collateral.
-    // While dispute_raised is true, enforce uses pre_dispute_required instead of
-    // required_collateral, preventing the importer from being locked out while admin reviews.
+    /// Contests the most recent oracle-set required_collateral value.
+    ///
+    /// Must be called by the importer within the 72-hour window opened by `set_required_collateral`.
+    /// While a dispute is raised, the contract enforces the pre-dispute required collateral value.
+    ///
+    /// # Parameters
+    /// - `env`: The Soroban execution environment.
+    /// - `importer`: The Stellar address of the registered importer.
+    ///
+    /// # Panics
+    /// - `Error::ImporterNotRegistered`: If the importer is not registered.
+    /// - `Error::AccountFrozen`: If the importer's account is clawed back.
+    /// - `Error::NoDisputeWindow`: If the 72-hour dispute window has expired or was never opened.
+    /// - `Error::DisputeAlreadyRaised`: If a dispute has already been raised and is pending resolution.
     pub fn raise_dispute(env: Env, importer: Address) {
         importer.require_auth();
         let mut acct = load_account(&env, &importer);
@@ -453,8 +771,18 @@ impl TariffShieldContract {
         );
     }
 
-    // #336 — platform admin resolves an open dispute.
-    // accept=true: the new oracle value stands; accept=false: revert to pre-dispute value.
+    /// Resolves an open importer dispute.
+    ///
+    /// Must be authorized by a platform administrator.
+    ///
+    /// # Parameters
+    /// - `env`: The Soroban execution environment.
+    /// - `importer`: The Stellar address of the registered importer.
+    /// - `accept`: If true, the new oracle requirement is accepted. If false, it is reverted to the pre-dispute value.
+    ///
+    /// # Panics
+    /// - `Error::NotAnAdmin`: If the caller is not a platform admin.
+    /// - `Error::NoActiveDispute`: If no active dispute exists for the importer.
     pub fn resolve_dispute(env: Env, importer: Address, accept: bool) {
         let admin = get_admin(&env);
         admin.require_auth();
@@ -474,11 +802,32 @@ impl TariffShieldContract {
         );
     }
 
-    // #331 — return the rolling on-chain history of the last 12 required_collateral values.
+    /// Returns the rolling on-chain history of the last 12 required collateral values.
+    ///
+    /// # Parameters
+    /// - `env`: The Soroban execution environment.
+    /// - `importer`: The Stellar address of the registered importer.
+    ///
+    /// # Returns
+    /// A vector of `CollateralHistoryEntry` records.
     pub fn get_collateral_history(env: Env, importer: Address) -> Vec<CollateralHistoryEntry> {
         load_account(&env, &importer).collateral_history
     }
 
+    /// Proposes a contract WASM code upgrade.
+    ///
+    /// Must be authorized by a platform administrator.
+    ///
+    /// # Parameters
+    /// - `env`: The Soroban execution environment.
+    /// - `caller`: The admin address proposing the upgrade.
+    /// - `new_wasm_hash`: The WASM hash of the new contract code.
+    ///
+    /// # Returns
+    /// The unique ID of the created upgrade proposal.
+    ///
+    /// # Panics
+    /// - `Error::NotAnAdmin`: If the caller is not a platform admin.
     pub fn propose_upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) -> u64 {
         require_admin(&env, &caller);
         caller.require_auth();
@@ -502,6 +851,21 @@ impl TariffShieldContract {
         proposal_id
     }
 
+    /// Approves a proposed contract WASM code upgrade.
+    ///
+    /// Must be authorized by a platform administrator. Once 2 approvals are collected,
+    /// the contract WASM is immediately upgraded.
+    ///
+    /// # Parameters
+    /// - `env`: The Soroban execution environment.
+    /// - `caller`: The admin address approving the upgrade.
+    /// - `proposal_id`: The unique ID of the upgrade proposal.
+    ///
+    /// # Panics
+    /// - `Error::NotAnAdmin`: If the caller is not a platform admin.
+    /// - `Error::ProposalNotFound`: If the proposal does not exist.
+    /// - `Error::ProposalExpired`: If the proposal has expired.
+    /// - `Error::AlreadyVoted`: If the caller has already approved this proposal.
     pub fn approve_upgrade(env: Env, caller: Address, proposal_id: u64) {
         require_admin(&env, &caller);
         caller.require_auth();
@@ -530,6 +894,18 @@ impl TariffShieldContract {
         }
     }
 
+    /// Cancels a proposed contract WASM code upgrade.
+    ///
+    /// Must be authorized by a platform administrator.
+    ///
+    /// # Parameters
+    /// - `env`: The Soroban execution environment.
+    /// - `caller`: The admin address canceling the upgrade.
+    /// - `proposal_id`: The unique ID of the upgrade proposal.
+    ///
+    /// # Panics
+    /// - `Error::NotAnAdmin`: If the caller is not a platform admin.
+    /// - `Error::ProposalNotFound`: If the proposal does not exist.
     pub fn cancel_upgrade(env: Env, caller: Address, proposal_id: u64) {
         require_admin(&env, &caller);
         caller.require_auth();
@@ -541,31 +917,86 @@ impl TariffShieldContract {
         env.storage().persistent().remove(&key);
     }
 
+    /// Returns the complete account state for an importer.
+    ///
+    /// # Parameters
+    /// - `env`: The Soroban execution environment.
+    /// - `importer`: The Stellar address of the importer.
+    ///
+    /// # Returns
+    /// The `Account` struct containing all balances and metadata.
     pub fn get_account(env: Env, importer: Address) -> Account {
         load_account(&env, &importer)
     }
 
+    /// Checks if the importer's collateral data is stale (no updates in > 365 days).
+    ///
+    /// # Parameters
+    /// - `env`: The Soroban execution environment.
+    /// - `account_id`: The Stellar address of the importer.
+    ///
+    /// # Returns
+    /// `true` if the data is stale, `false` otherwise.
     pub fn is_collateral_stale(env: Env, account_id: Address) -> bool {
         let acct = load_account(&env, &account_id);
         is_stale(&env, &acct)
     }
 
+    /// Returns the primary platform admin address.
+    ///
+    /// # Parameters
+    /// - `env`: The Soroban execution environment.
+    ///
+    /// # Returns
+    /// The `Address` of the platform admin.
     pub fn get_admin(env: Env) -> Address {
         get_admin(&env)
     }
+
+    /// Returns the surety admin address.
+    ///
+    /// # Parameters
+    /// - `env`: The Soroban execution environment.
+    ///
+    /// # Returns
+    /// The `Address` of the surety.
     pub fn get_surety(env: Env) -> Address {
         get_surety(&env)
     }
+
+    /// Returns the SAC token address used for collateral.
+    ///
+    /// # Parameters
+    /// - `env`: The Soroban execution environment.
+    ///
+    /// # Returns
+    /// The `Address` of the token.
     pub fn get_token(env: Env) -> Address {
         get_token(&env)
     }
 
-    // #339 — view the current oracle admin address
+    /// Returns the oracle admin address.
+    ///
+    /// # Parameters
+    /// - `env`: The Soroban execution environment.
+    ///
+    /// # Returns
+    /// The `Address` of the oracle admin.
     pub fn get_oracle_admin(env: Env) -> Address {
         get_oracle_admin(&env)
     }
 
-    // #339 — general admin can rotate the oracle admin key (e.g. after compromise)
+    /// Rotates the oracle admin address.
+    ///
+    /// Must be authorized by a platform administrator.
+    ///
+    /// # Parameters
+    /// - `env`: The Soroban execution environment.
+    /// - `caller`: The admin address initiating the rotation.
+    /// - `new_oracle_admin`: The new oracle admin address.
+    ///
+    /// # Panics
+    /// - `Error::NotAnAdmin`: If the caller is not a platform admin.
     pub fn rotate_oracle_admin(env: Env, caller: Address, new_oracle_admin: Address) {
         require_admin(&env, &caller);
         caller.require_auth();
@@ -577,10 +1008,13 @@ impl TariffShieldContract {
         );
     }
 
-    /// Transfer the platform admin role to a new address.
-    /// The current admin must authorize the call; the new admin is written to
-    /// persistent storage and an `admin_transferred` event is emitted containing
-    /// the old address, new address, and block timestamp.
+    /// Transfers the platform admin role to a new address.
+    ///
+    /// The current admin must authorize the call.
+    ///
+    /// # Parameters
+    /// - `env`: The Soroban execution environment.
+    /// - `new_admin`: The new platform admin address.
     pub fn transfer_admin(env: Env, new_admin: Address) {
         let old_admin = get_admin(&env);
         old_admin.require_auth();
@@ -596,6 +1030,18 @@ impl TariffShieldContract {
         );
     }
 
+    /// Migrates an importer's account state to a new `Account` structure.
+    ///
+    /// Must be authorized by a platform administrator.
+    ///
+    /// # Parameters
+    /// - `env`: The Soroban execution environment.
+    /// - `admin`: The admin address authorizing the migration.
+    /// - `importer`: The Stellar address of the importer.
+    /// - `new_account`: The new `Account` state.
+    ///
+    /// # Panics
+    /// - `Error::NotAnAdmin`: If the caller is not a platform admin.
     pub fn migrate_account(env: Env, admin: Address, importer: Address, new_account: Account) {
         require_admin(&env, &admin);
         admin.require_auth();
@@ -606,6 +1052,13 @@ impl TariffShieldContract {
         );
     }
 
+    /// Sets the price oracle contract address.
+    ///
+    /// Must be authorized by the platform admin.
+    ///
+    /// # Parameters
+    /// - `env`: The Soroban execution environment.
+    /// - `oracle`: The Stellar address of the price oracle.
     pub fn set_price_oracle(env: Env, oracle: Address) {
         let admin = get_admin(&env);
         admin.require_auth();
@@ -613,10 +1066,24 @@ impl TariffShieldContract {
         env.events().publish((symbol_short!("oracle"), oracle.clone()), ());
     }
 
+    /// Returns the optional price oracle contract address.
+    ///
+    /// # Parameters
+    /// - `env`: The Soroban execution environment.
+    ///
+    /// # Returns
+    /// The `Option<Address>` of the price oracle if set.
     pub fn get_price_oracle(env: Env) -> Option<Address> {
         env.storage().instance().get(&DataKey::PriceOracle)
     }
 
+    /// Upgrades the contract WASM bytecode.
+    ///
+    /// Must be authorized by the platform admin.
+    ///
+    /// # Parameters
+    /// - `env`: The Soroban execution environment.
+    /// - `new_wasm_hash`: The WASM hash of the new contract code.
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
         let admin = get_admin(&env);
         admin.require_auth();
@@ -633,11 +1100,16 @@ impl TariffShieldContract {
         );
     }
 
+    /// Returns the current contract version symbol.
+    ///
+    /// # Returns
+    /// The contract version `Symbol`.
     pub fn version() -> Symbol {
         symbol_short!("v0_3_0")
     }
 }
 
+/// Retrieves the primary platform administrator address from instance storage.
 fn get_admin(env: &Env) -> Address {
     let admins: Vec<Address> = env.storage()
         .instance()
@@ -646,6 +1118,7 @@ fn get_admin(env: &Env) -> Address {
     admins.get(0).unwrap()
 }
 
+/// Asserts that the specified address is an authorized platform administrator.
 fn require_admin(env: &Env, caller: &Address) {
     let admins: Vec<Address> = env.storage()
         .instance()
@@ -656,6 +1129,7 @@ fn require_admin(env: &Env, caller: &Address) {
     }
 }
 
+/// Retrieves the surety administrator address from instance storage.
 fn get_surety(env: &Env) -> Address {
     env.storage()
         .instance()
@@ -663,6 +1137,7 @@ fn get_surety(env: &Env) -> Address {
         .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized))
 }
 
+/// Retrieves the SAC token contract address from instance storage.
 fn get_token(env: &Env) -> Address {
     env.storage()
         .instance()
@@ -670,6 +1145,7 @@ fn get_token(env: &Env) -> Address {
         .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized))
 }
 
+/// Loads the account state of a registered importer from persistent storage.
 fn load_account(env: &Env, importer: &Address) -> Account {
     env.storage()
         .persistent()
@@ -677,22 +1153,26 @@ fn load_account(env: &Env, importer: &Address) -> Account {
         .unwrap_or_else(|| panic_with_error!(env, Error::ImporterNotRegistered))
 }
 
+/// Saves the account state of a registered importer to persistent storage.
 fn save_account(env: &Env, importer: &Address, acct: &Account) {
     env.storage()
         .persistent()
         .set(&DataKey::Account(importer.clone()), acct);
 }
 
+/// Asserts that the importer's account is active and has not been clawed back.
 fn require_active(env: &Env, acct: &Account) {
     if acct.is_clawbacked {
         panic_with_error!(env, Error::AccountFrozen);
     }
 }
 
+/// Checks if the importer's account state is stale (older than 365 days).
 fn is_stale(env: &Env, acct: &Account) -> bool {
     env.ledger().timestamp() > acct.collateral_last_updated + 365 * 86400
 }
 
+/// Asserts that the importer's account state is fresh (not stale).
 fn require_fresh_collateral(env: &Env, importer: &Address, acct: &Account) {
     if is_stale(env, acct) {
         let expiry = acct.collateral_last_updated + 365 * 86400;
@@ -701,6 +1181,7 @@ fn require_fresh_collateral(env: &Env, importer: &Address, acct: &Account) {
     }
 }
 
+/// Retrieves the oracle administrator address from instance storage.
 fn get_oracle_admin(env: &Env) -> Address {
     env.storage()
         .instance()
@@ -708,6 +1189,7 @@ fn get_oracle_admin(env: &Env) -> Address {
         .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized))
 }
 
+/// Retrieves the emergency oracle administrator address from instance storage.
 fn get_emergency_oracle_admin(env: &Env) -> Address {
     env.storage()
         .instance()
@@ -715,10 +1197,12 @@ fn get_emergency_oracle_admin(env: &Env) -> Address {
         .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized))
 }
 
+/// Retrieves the optional price oracle address from instance storage.
 fn get_price_oracle_optional(env: &Env) -> Option<Address> {
     env.storage().instance().get(&DataKey::PriceOracle)
 }
 
+/// Invokes the external price oracle contract to fetch the current USDC/USD rate.
 fn get_usdc_usd_rate(env: &Env, oracle: &Address) -> i128 {
     let rate: i128 = env
         .invoke_contract(
@@ -729,9 +1213,7 @@ fn get_usdc_usd_rate(env: &Env, oracle: &Address) -> i128 {
     rate
 }
 
-// #336 — returns the required_collateral value currently in force for enforcement.
-// During an active dispute the pre-dispute (lower) value is used so the importer
-// is not locked out while admin review is pending.
+/// Returns the required collateral value currently in force (respects active disputes).
 fn effective_required(acct: &Account) -> i128 {
     if acct.dispute_raised {
         acct.pre_dispute_required
