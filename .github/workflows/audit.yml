@@ -1,0 +1,199 @@
+name: Security Audit
+
+on:
+  pull_request:
+    branches: [main, master]
+  schedule:
+    # Run daily at 06:00 UTC
+    - cron: '0 6 * * *'
+  # Allow manual triggering for testing
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  audit:
+    name: Dependency & License Audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust Toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+
+      - name: Generate Cargo Lockfile
+        run: cargo generate-lockfile
+
+      # --- CARGO AUDIT ---
+      - name: Cache cargo-audit
+        id: cache-cargo-audit
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-audit
+          key: ${{ runner.os }}-cargo-audit-v1
+
+      - name: Install cargo-audit
+        if: steps.cache-cargo-audit.outputs.cache-hit != 'true'
+        run: cargo install cargo-audit --locked
+
+      - name: Configure cargo-audit
+        run: |
+          mkdir -p .cargo
+          echo -e "[advisories]\nseverity_threshold = \"high\"" > .cargo/audit.toml
+
+      - name: Run Cargo Audit
+        run: |
+          cargo audit --json > cargo-audit-report.json
+
+      - name: Upload Cargo Audit Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cargo-audit-report.json
+          path: cargo-audit-report.json
+
+      # --- NPM AUDIT ---
+      - name: Run NPM Audit
+        if: always()
+        run: |
+          npm audit --json > npm-audit-report.json || true
+
+      - name: Parse NPM Audit and Enforce Policies
+        if: always()
+        run: |
+          node -e "
+          const fs = require('fs');
+          try {
+            if (!fs.existsSync('npm-audit-report.json')) {
+              console.error('NPM audit report not found.');
+              process.exit(1);
+            }
+            const report = JSON.parse(fs.readFileSync('npm-audit-report.json', 'utf8'));
+            let hasCritical = false;
+            let highCount = 0;
+            if (report.vulnerabilities) {
+              for (const [pkg, vuln] of Object.entries(report.vulnerabilities)) {
+                const severity = vuln.severity;
+                const viaList = Array.isArray(vuln.via) ? vuln.via : [vuln.via];
+                const viaStr = viaList.map(v => typeof v === 'object' ? v.title : v).filter(Boolean).join(', ') || 'unknown';
+                if (severity === 'critical') {
+                  hasCritical = true;
+                  console.log(\`::error file=package.json::[NPM] Critical vulnerability in \${pkg}: via \${viaStr}\`);
+                } else if (severity === 'high') {
+                  highCount++;
+                  console.log(\`::warning file=package.json::[NPM] High vulnerability in \${pkg}: via \${viaStr}\`);
+                }
+              }
+            }
+            if (hasCritical) {
+              console.error('Failing build due to critical NPM vulnerabilities.');
+              process.exit(1);
+            } else {
+              console.log(\`NPM audit passed. Found \${highCount} high-severity vulnerabilities (reported as warnings).\`);
+            }
+          } catch (err) {
+            console.error('Failed to parse NPM audit report:', err);
+            process.exit(1);
+          }
+          "
+
+      - name: Upload NPM Audit Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: npm-audit-report.json
+          path: npm-audit-report.json
+
+      # --- CARGO DENY ---
+      - name: Cache cargo-deny
+        id: cache-cargo-deny
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-deny
+          key: ${{ runner.os }}-cargo-deny-v1
+
+      - name: Install cargo-deny
+        if: always() && steps.cache-cargo-deny.outputs.cache-hit != 'true'
+        run: cargo install cargo-deny --locked
+
+      - name: Run Cargo Deny Check
+        if: always()
+        run: cargo deny check licenses bans
+
+      # --- FAILURE NOTIFICATION (SCHEDULED ONLY) ---
+      - name: Create Issue on Scheduled Failure
+        uses: actions/github-script@v7
+        if: failure() && github.event_name == 'schedule'
+        with:
+          script: |
+            const fs = require('fs');
+            let body = 'The scheduled security audit failed. Please review the details below:\n\n';
+            let hasVulnerabilities = false;
+            
+            // Read cargo audit report if exists
+            if (fs.existsSync('cargo-audit-report.json')) {
+              try {
+                const cargoReport = JSON.parse(fs.readFileSync('cargo-audit-report.json', 'utf8'));
+                if (cargoReport.vulnerabilities && cargoReport.vulnerabilities.list && cargoReport.vulnerabilities.list.length > 0) {
+                  hasVulnerabilities = true;
+                  body += '### Cargo Audit Vulnerabilities\n';
+                  for (const vuln of cargoReport.vulnerabilities.list) {
+                    const adv = vuln.advisory;
+                    const cves = adv.aliases ? adv.aliases.join(', ') : adv.id;
+                    body += `- **${adv.package}**: ${adv.title} (${cves}) - [Advisory](${adv.url})\n`;
+                  }
+                  body += '\n';
+                }
+              } catch (e) {
+                body += `Failed to parse cargo-audit-report.json: ${e.message}\n\n`;
+              }
+            }
+            
+            // Read npm audit report if exists
+            if (fs.existsSync('npm-audit-report.json')) {
+              try {
+                const npmReport = JSON.parse(fs.readFileSync('npm-audit-report.json', 'utf8'));
+                if (npmReport.vulnerabilities) {
+                  let found = false;
+                  let npmBody = '### NPM Audit Vulnerabilities\n';
+                  for (const [pkg, vuln] of Object.entries(npmReport.vulnerabilities)) {
+                    const severity = vuln.severity;
+                    if (severity === 'critical' || severity === 'high') {
+                      found = true;
+                      hasVulnerabilities = true;
+                      const viaList = Array.isArray(vuln.via) ? vuln.via : [vuln.via];
+                      const viaStr = viaList.map(v => typeof v === 'object' ? v.title : v).filter(Boolean).join(', ') || 'unknown';
+                      npmBody += `- **${pkg}** (${severity}): via ${viaStr}\n`;
+                    }
+                  }
+                  if (found) {
+                    body += npmBody + '\n';
+                  }
+                }
+              } catch (e) {
+                body += `Failed to parse npm-audit-report.json: ${e.message}\n\n`;
+              }
+            }
+            
+            if (!hasVulnerabilities) {
+              body += 'The failure was likely caused by a license violation or duplicate crate version checked by `cargo-deny`.\n';
+            }
+            
+            const date = new Date().toISOString().split('T')[0];
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Security: dependency vulnerability found — ${date}`,
+              body: body
+            });
