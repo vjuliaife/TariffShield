@@ -1,0 +1,54 @@
+name: Deploy Staging
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Trigger Render Staging Deploy Hook
+        run: |
+          if [ -z "${{ secrets.STAGING_RENDER_DEPLOY_HOOK_URL }}" ]; then
+            echo "STAGING_RENDER_DEPLOY_HOOK_URL secret is not set."
+            exit 1
+          fi
+          curl -X POST "${{ secrets.STAGING_RENDER_DEPLOY_HOOK_URL }}"
+
+      - name: Deploy Web to Vercel Staging
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          scope: ${{ secrets.VERCEL_ORG_ID }}
+          working-directory: ./apps/web
+          build-env: |
+            NEXT_PUBLIC_API_URL=https://tariffshield-api-staging.onrender.com
+            NEXT_PUBLIC_STELLAR_NETWORK=testnet
+            NEXT_PUBLIC_CONTRACT_ID=${{ secrets.STAGING_CONTRACT_ID }}
+
+      - name: Poll Staging Health Endpoint
+        run: |
+          echo "Waiting for staging API deployment to propagate..."
+          # Poll the health endpoint for up to 5 minutes (300 seconds) with a 15-second interval
+          for i in {1..20}; do
+            if curl -s -f https://tariffshield-api-staging.onrender.com/health; then
+              echo "Staging API is healthy and reachable!"
+              exit 0
+            fi
+            echo "Staging API is not ready yet, retrying in 15 seconds... ($i/20)"
+            sleep 15
+          done
+          echo "Staging API failed to become healthy within 5 minutes."
+          exit 1
+
+      - name: Report Staging Deployment Status
+        run: echo "Staging deployed successfully for commit ${{ github.sha }}"

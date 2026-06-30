@@ -1,0 +1,7 @@
+{
+  "extends": ["tariffshield"],
+  "parserOptions": {
+    "project": "./tsconfig.json"
+  },
+  "ignorePatterns": ["dist/**", "node_modules/**"]
+}

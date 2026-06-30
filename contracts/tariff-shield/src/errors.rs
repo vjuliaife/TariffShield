@@ -29,4 +29,7 @@ pub enum Error {
     DisputeAlreadyRaised = 19,
     // #336 — admin tried to resolve a dispute that was never raised
     NoActiveDispute = 20,
+    // oracle multi-sig rotation — bad signer set or insufficient approvals
+    InvalidSignatureSet = 21,
+    InsufficientSignatures = 22,
 }

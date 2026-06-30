@@ -1,0 +1,12 @@
+name: TariffShield CodeQL Config
+
+paths-ignore:
+  - node_modules
+  - "**/node_modules/**"
+  - "**/dist/**"
+  - "**/.next/**"
+  - "**/build/**"
+  - "packages/api-types/**"
+
+queries:
+  - uses: security-and-quality

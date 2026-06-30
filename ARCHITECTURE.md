@@ -181,26 +181,52 @@ sequenceDiagram
 
 After clawback, any subsequent `deposit_*` / `withdraw_*` / `auto_top_up` / `accrue_yield` on this importer panics with `Error::AccountFrozen`.
 
-## 5. Off-chain data model
+## 5. Database Schema
 
 ```mermaid
 erDiagram
-    USERS ||--o{ IMPORTERS : "is owner"
-    IMPORTERS ||--o{ TARIFF_UPLOADS : "history"
-    IMPORTERS ||--o{ CONTRACT_EVENTS : "audit log"
+    users ||--o{ importers : has
+    importers ||--o{ tariff_uploads : uploads
+    importers ||--o{ contract_events : generates
 
-    USERS { uuid id PK; text email; text password_hash; text role; }
-    IMPORTERS { uuid id PK; uuid user_id FK; text legal_name; text ein; bigint bond_id; text stellar_address; text registered_on_chain_tx; }
-    TARIFF_UPLOADS { uuid id PK; uuid importer_id FK; text filename; numeric annual_duty_total; numeric computed_required_collateral; text applied_tx; }
-    CONTRACT_EVENTS { uuid id PK; uuid importer_id FK; text kind; numeric amount; text tx_hash; jsonb raw; }
+    users {
+        uuid id PK
+        text email
+        text password_hash
+        text role
+    }
+
+    importers {
+        uuid id PK
+        uuid user_id FK
+        text legal_name
+        text ein
+        bigint bond_id
+        text stellar_address
+        text stellar_secret_encrypted
+        text registered_on_chain_tx
+    }
+
+    tariff_uploads {
+        uuid id PK
+        uuid importer_id FK
+        text filename
+        numeric annual_duty_total
+        numeric computed_required_collateral
+        text applied_tx
+    }
+
+    contract_events {
+        uuid id PK
+        uuid importer_id FK
+        text kind
+        numeric amount
+        text tx_hash
+        jsonb raw
+    }
 ```
 
-Postgres holds:
-
-- **users** — auth (email, bcrypt hash, role)
-- **importers** — CRM (legal name, EIN, bond ID, generated Stellar address)
-- **tariff_uploads** — audit history of CSV ingest + computed required collateral
-- **contract_events** — mirror of on-chain events for fast UI rendering
+The ownership model centers around `users` acting as owners of `importers`. In turn, `importers` own their history of `tariff_uploads` and their stream of `contract_events`. The `contract_events` mirror Soroban on-chain activity for fast UI rendering and auditing.
 
 The importer's Stellar **secret key** is currently stored in plaintext in `stellar_secret_encrypted` — the column is named for the upcoming migration to AES-256-GCM at rest (see roadmap). This is intentional and tracked.
 

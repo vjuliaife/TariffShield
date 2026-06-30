@@ -1,6 +1,11 @@
 import { withSentryConfig } from "@sentry/nextjs";
 import type { NextConfig } from "next";
-const config: NextConfig = { reactStrictMode: true };
+const config: NextConfig = {
+  reactStrictMode: true,
+  env: {
+    NEXT_PUBLIC_STELLAR_NETWORK: process.env.NEXT_PUBLIC_STELLAR_NETWORK,
+  },
+};
 export default withSentryConfig(config, {
   // For all available options, see:
   // https://www.npmjs.com/package/@sentry/webpack-plugin#options

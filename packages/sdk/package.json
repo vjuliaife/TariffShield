@@ -12,7 +12,11 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "lint": "eslint --max-warnings 0 src",
+    "lint:fix": "eslint --fix src",
+    "format:check": "prettier --check .",
+    "format": "prettier --write ."
   },
   "dependencies": {
     "@stellar/stellar-sdk": "^15.0.0"
