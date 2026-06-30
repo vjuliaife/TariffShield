@@ -10,6 +10,7 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
+    "dev": "concurrently -k -n api,web -c blue,green \"npm run dev:api\" \"npm run dev:web\"",
     "dev:api": "npm run dev --workspace=apps/api",
     "dev:web": "npm run dev --workspace=apps/web",
     "contract:build": "cd contracts && cargo build --target wasm32-unknown-unknown --release",
@@ -25,9 +26,15 @@
     "verify-upgrade": "tsx scripts/verify-upgrade.ts",
     "rollback-upgrade": "tsx scripts/rollback-upgrade.ts",
     "list-wasm-hashes": "tsx scripts/list-wasm-hashes.ts",
-    "changelog": "conventional-changelog -p angular -i CHANGELOG.md -s"
+    "changelog": "conventional-changelog -p angular -i CHANGELOG.md -s",
+    "generate:types": "openapi-typescript apps/api/openapi.yaml -o packages/api-types/index.ts"
   },
   "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "concurrently": "^9.1.0",
+    "eslint": "^8.57.0",
+    "openapi-typescript": "^7.0.0",
     "@commitlint/cli": "^19.0.0",
     "@commitlint/config-conventional": "^19.0.0",
     "@semantic-release/changelog": "^6.0.0",
@@ -36,6 +43,7 @@
     "@semantic-release/github": "^10.0.0",
     "@semantic-release/npm": "^12.0.0",
     "conventional-changelog-cli": "^5.0.0",
+    "prettier": "^3.0.0",
     "semantic-release": "^24.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.2"

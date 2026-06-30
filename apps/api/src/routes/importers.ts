@@ -7,6 +7,7 @@ import { authMiddleware, privacyReacceptanceGate, tosReacceptanceGate, type Auth
 import { requireLicenseVerified } from "./surety-license.js";
 import { contractClient, explorerTx, platformKeypair, suretyKeypair } from "../stellar.js";
 import { lookupCbpDutyRate } from "../services/cbp-duty-lookup.js";
+import { validateHtsRates } from "../services/hts-rate-validator.js";
 import { screenImporterEntity, screenWalletAddress } from "../services/aml-screening.js";
 import { validateBondForm301 } from "../services/cbp-bond-validation.js";
 import { env } from "../config/env.js";
@@ -21,6 +22,7 @@ const CreateImporterSchema = z.object({
   ein: z.string().optional(),
   bondId: z.coerce.number().int().positive(),
   initialRequiredCollateral: z.string().regex(/^\d+$/),
+  businessState: z.string().length(2).toUpperCase().optional(),
 });
 
 importersRouter.post("/", async (req: Request, res: Response) => {
@@ -35,7 +37,7 @@ importersRouter.post("/", async (req: Request, res: Response) => {
     res.status(400).json({ error: "invalid input", details: parse.error.issues });
     return;
   }
-  const { legalName, ein, bondId, initialRequiredCollateral } = parse.data;
+  const { legalName, ein, bondId, initialRequiredCollateral, businessState } = parse.data;
 
   const ofacClear = await screenImporterEntity(legalName, ein);
   if (!ofacClear) {
@@ -73,18 +75,18 @@ importersRouter.post("/", async (req: Request, res: Response) => {
   }
 
   const inserted = await pool.query(
-    `INSERT INTO importers (user_id, legal_name, ein, bond_id, stellar_address, stellar_secret_encrypted)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO importers (user_id, legal_name, ein, bond_id, stellar_address, stellar_secret_encrypted, business_state)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING id, legal_name, ein, bond_id, stellar_address, created_at`,
-    [user.id, legalName, ein ?? null, bondId, kp.publicKey(), kp.secret()],
+    [user.id, legalName, ein ?? null, bondId, kp.publicKey(), kp.secret(), businessState ?? "CA"],
   );
   const importer = inserted.rows[0]!;
 
   await pool.query(
     `INSERT INTO bond_records (importer_id, bond_id, bond_type_code, principal_legal_name, principal_ein,
-                               surety_company_name, surety_fein, bond_amount, cbp_minimum_required, effective_date, template_version, cbp_regulation_revision_date)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-    [importer.id, bondId, "02", legalName, ein ?? null, "TBD", "TBD", initialRequiredCollateral, bondValidation.minimumRequired.toString(), new Date(), "1.0", new Date()],
+                               surety_company_name, surety_fein, bond_amount, cbp_minimum_required, effective_date, template_version, cbp_regulation_revision_date, state_code)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+    [importer.id, bondId, "02", legalName, ein ?? null, "TBD", "TBD", initialRequiredCollateral, bondValidation.minimumRequired.toString(), new Date(), "1.0", new Date(), businessState ?? "CA"],
   );
 
   // Fund the importer account via friendbot (testnet only)
@@ -242,6 +244,39 @@ importersRouter.post("/:id/upload-tariff-csv", async (req: Request, res: Respons
     return;
   }
 
+  // ── HTS statutory rate validation ──────────────────────────────────────────
+  // Cross-reference every line item's declared duty rate against the USITC HTS
+  // schedule before feeding the rates into the collateral computation.
+  const htsValidation = await validateHtsRates(
+    parse.data.lineItems.map((item) => ({
+      hts_code: item.htsCode,
+      declared_rate: item.dutyRate,
+    })),
+  );
+
+  if (htsValidation.hasBlockingErrors) {
+    res.status(422).json({
+      error: "HTS rate validation failed: one or more line items are underreported",
+      flagged: htsValidation.blocking.map((r) => ({
+        htsCode: r.hts_code,
+        declaredRate: r.declared_rate,
+        statutoryRate: r.statutory_rate,
+        message: r.message,
+      })),
+    });
+    return;
+  }
+
+  // Collect non-blocking warnings to surface in the response.
+  const htsWarnings = htsValidation.warnings.map((r) => ({
+    htsCode: r.hts_code,
+    status: r.status,
+    declaredRate: r.declared_rate,
+    statutoryRate: r.statutory_rate,
+    message: r.message,
+  }));
+
+  // ── Legacy CBP validation (kept for compatibility) ─────────────────────────
   let annualDutyTotal = 0;
   const validationReport = [];
   let hasBlockError = false;
@@ -300,6 +335,7 @@ importersRouter.post("/:id/upload-tariff-csv", async (req: Request, res: Respons
       requiredCollateralStroops: requiredStroops.toString(),
       txHash: onChain.txHash,
       txUrl: explorerTx(onChain.txHash),
+      htsWarnings: htsWarnings.length > 0 ? htsWarnings : undefined,
     });
   } catch (err: any) {
     const errMsg = String(err);
