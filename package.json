@@ -26,6 +26,7 @@
     "verify-upgrade": "tsx scripts/verify-upgrade.ts",
     "rollback-upgrade": "tsx scripts/rollback-upgrade.ts",
     "list-wasm-hashes": "tsx scripts/list-wasm-hashes.ts",
+    "changelog": "conventional-changelog -p angular -i CHANGELOG.md -s",
     "generate:types": "openapi-typescript apps/api/openapi.yaml -o packages/api-types/index.ts"
   },
   "devDependencies": {
@@ -41,6 +42,7 @@
     "@semantic-release/git": "^10.0.0",
     "@semantic-release/github": "^10.0.0",
     "@semantic-release/npm": "^12.0.0",
+    "conventional-changelog-cli": "^5.0.0",
     "prettier": "^3.0.0",
     "semantic-release": "^24.0.0",
     "tsx": "^4.19.0",

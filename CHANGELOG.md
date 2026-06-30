@@ -1,102 +1,32 @@
-# Changelog
+## 0.1.0 (2026-06-29)
 
-All notable changes to TariffShield will be documented in this file.
-
-This file follows the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
-TariffShield adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
-## [Unreleased]
-
-### Added
-
-- Live CBP ACE API integration via surety relay
-- Sumsub / Smile Identity KYC for importer onboarding
-- Real Franklin Templeton BENJI yield routing
-- Mainnet config + Circle USDC swap (KYC asset with `auth_required` + `clawback` flags)
-- Encrypted-at-rest importer Stellar secrets (AES-256-GCM)
-- Surety admin SAML claims-history export
-- Per-state surety insurance regulator filings
-- Tariff-spike alert system (email + SMS via Twilio)
-- Multi-importer-entity support (subsidiaries, related parties)
-- Path-payment fallback when surety wallet currency ≠ USDC
-- SOC 2 Type II + ISO 27001 prep
-- On-chain immutable event log export for state regulators
-- CI: `cargo test` + WASM size budget gate
-- Indexer: subscribe to contract events via Soroban RPC → populate Postgres mirror
-- Bond-policy templates (continuous vs single-entry vs ATA Carnet)
-- Hardware wallet support for surety admin (Ledger via stellar-base)
-
----
-
-## [0.1.0] — 2026-05-18
-
-### Added
-
-**Soroban Smart Contract (`contracts/tariff-shield/src/lib.rs`)**
-
-- `initialize` — deploys the contract and sets the admin, surety, and USDC token addresses; stores the dispute window and multi-sig upgrade threshold
-- `register_importer` — registers an importer account on-chain and assigns a bond ID with a required collateral amount
-- `deposit_collateral` — transfers USDC from the importer's wallet into the contract escrow; emits `DepositEvent`
-- `deposit_reserve` — allows the surety or admin to top up the reserve pool separately from importer collateral
-- `withdraw_collateral` — returns escrowed USDC to the importer after verifying the bond is in good standing
-- `accrue_yield` — credits simulated yield (Franklin Templeton BENJI placeholder) to an importer's on-chain balance
-- `auto_top_up` — automatically moves funds from the reserve pool to an importer whose collateral has fallen below the required threshold; emits `AutoTopUpEvent`
-- `clawback` — irreversibly transfers an importer's full collateral balance to the surety wallet upon default or regulatory directive; emits `ClawbackEvent`
-- `raise_dispute` — allows an importer to open a formal dispute against a clawback or reserve action; emits `DisputeRaisedEvent`
-- `resolve_dispute` — allows the surety to accept or reject a dispute; emits `DisputeResolvedEvent`
-- `set_required_collateral` — admin-only update to an importer's required collateral threshold
-- `get_account` — returns the full on-chain account state for an importer (balances, bond ID, dispute status)
-- `is_collateral_stale` — returns `true` if the importer's collateral has not been updated within the configured staleness window
-- `get_collateral_history` — returns a chronological log of all collateral changes for an importer
-- `propose_upgrade` / `approve_upgrade` / `cancel_upgrade` — multi-sig two-of-three contract upgrade mechanism; upgrade requires two admin approvals before WASM replacement
-- `get_admin`, `get_surety`, `get_token` — read-only accessors for core contract configuration
-
-**REST API (`apps/api/src/routes/`)**
-
-- `POST /auth/signup` — create a new surety admin account (bcrypt-hashed password, JWT issued)
-- `POST /auth/login` — authenticate and receive a signed JWT
-- `GET /auth/me` — return the authenticated user's profile
-- `GET /auth/saml/metadata` — serve SAML SP metadata XML for identity provider configuration
-- `GET /auth/saml/:provider/login` — initiate SAML SSO login flow
-- `POST /auth/saml/:provider/callback` — handle SAML assertion and issue a session JWT
-- `POST /importers` — register a new importer; provisions a Stellar keypair and persists the account
-- `GET /importers` — list all importers with pagination and optional status filter
-- `GET /importers/:id` — retrieve a single importer record with on-chain state
-- `GET /importers/:id/collateral-status` — return live collateral health (current vs required, staleness flag)
-- `POST /importers/:id/upload-tariff-csv` — parse and store a CBP-format tariff schedule CSV; validates column headers and duty rates
-- `POST /importers/:id/deposit` — build and submit an on-chain `deposit_collateral` transaction
-- `POST /importers/:id/auto-top-up` — trigger `auto_top_up` for the importer from the reserve pool
-- `POST /importers/:id/withdraw` — build and submit an on-chain `withdraw_collateral` transaction
-- `POST /importers/:id/accrue-yield` — trigger `accrue_yield` for the importer (surety-licensed callers only)
-- `POST /importers/:id/clawback` — execute the `clawback` entrypoint (surety-licensed callers only); records audit log entry
-- `GET /health` — liveness probe returning service name and timestamp
-
-**TypeScript SDK (`packages/sdk/src/index.ts`)**
-
-- `TariffShieldClient` class wrapping all contract entrypoints as typed async methods: `initialize`, `registerImporter`, `depositCollateral`, `depositReserve`, `withdrawCollateral`, `accrueYield`, `autoTopUp`, `clawback`, `raiseDispute`, `resolveDispute`, `getAccount`, `isCollateralStale`, `getCollateralHistory`
-- Soroban RPC integration using `@stellar/stellar-sdk` with configurable network passphrase and RPC URL
-
-**Next.js Web Interface (`apps/web/`)**
-
-- Surety admin dashboard with importer list, collateral status cards, and action buttons for deposit, withdrawal, clawback, and yield accrual
-- Importer onboarding flow: signup → KYC placeholder → bond agreement → initial deposit
-- Login and signup pages with JWT session management
-- Tariff CSV upload UI with drag-and-drop and column-mapping preview
-
-**Infrastructure**
-
-- Docker Compose stack: PostgreSQL 16, API server, Next.js web app, and optional local Stellar testnet node
-- Database migration system (`apps/api/src/db.ts`) with schema for `importers`, `tariff_entries`, `contract_events`, `surety_licenses`, `audit_log`, and `privacy_acceptances` tables
-- Zod-validated environment loader (`apps/api/src/env.ts`) with required and optional variable enforcement
-- Rate limiting (express-rate-limit), CORS, and Helmet HTTP security headers on all API routes
-
-### Security
-
-- JWT authentication on all importer API routes via `authMiddleware`; tokens signed with `JWT_SECRET` and expire after a configurable TTL
-- `require_auth()` Soroban guard on all privileged contract functions (`clawback`, `withdraw_collateral`, `accrue_yield`, `set_required_collateral`, `propose_upgrade`, `approve_upgrade`, `cancel_upgrade`), preventing unsigned invocations
-- Bcrypt password hashing (cost factor 12) for surety admin credentials
-- Surety license verification gate (`requireLicenseVerified`) on clawback and yield accrual endpoints to prevent unauthorised financial actions
-- Privacy policy re-acceptance gate enforced on every importer route after a policy version change
-
-[Unreleased]: https://github.com/vjuliaife/TariffShield/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/vjuliaife/TariffShield/releases/tag/v0.1.0
+* fix(auth): tighten comment on sessionId check; fail-closed privacyReacceptanceGate ([9404fad](https://github.com/Owolabenjade/TariffShield/commit/9404fad))
+* fix(soc2): fail-closed session validation and close legacy token bypass ([bcd19c8](https://github.com/Owolabenjade/TariffShield/commit/bcd19c8))
+* feat: add API error codes reference, env var docs, test strategy, and SOC 2 CC6 controls ([fb1d72d](https://github.com/Owolabenjade/TariffShield/commit/fb1d72d)), closes [#305](https://github.com/Owolabenjade/TariffShield/issues/305) [#302](https://github.com/Owolabenjade/TariffShield/issues/302) [#301](https://github.com/Owolabenjade/TariffShield/issues/301)
+* feat: add CI job split, branch protection, Vercel preview, Dependabot, and Playwright E2E ([9dde842](https://github.com/Owolabenjade/TariffShield/commit/9dde842)), closes [#280](https://github.com/Owolabenjade/TariffShield/issues/280) [#270](https://github.com/Owolabenjade/TariffShield/issues/270) [#272](https://github.com/Owolabenjade/TariffShield/issues/272) [#277](https://github.com/Owolabenjade/TariffShield/issues/277)
+* feat: add FAQ docs, full-stack Docker, DB instrumentation, and OTel tracing ([686119e](https://github.com/Owolabenjade/TariffShield/commit/686119e))
+* feat: add indexer lag monitoring and alerts ([ae071e8](https://github.com/Owolabenjade/TariffShield/commit/ae071e8))
+* feat: add OpenAPI 3.1 spec with Swagger UI and surety admin operations runbook ([4c47157](https://github.com/Owolabenjade/TariffShield/commit/4c47157))
+* feat: add Postman collection, support runbook, PR template, and commitlint ([ee40cf1](https://github.com/Owolabenjade/TariffShield/commit/ee40cf1)), closes [#293](https://github.com/Owolabenjade/TariffShield/issues/293) [#304](https://github.com/Owolabenjade/TariffShield/issues/304) [#281](https://github.com/Owolabenjade/TariffShield/issues/281) [#273](https://github.com/Owolabenjade/TariffShield/issues/273)
+* feat: add prometheus metrics endpoint and rpc instrumentation ([bf6bd8a](https://github.com/Owolabenjade/TariffShield/commit/bf6bd8a))
+* feat: add verbose soroban rpc logging ([0e69ba2](https://github.com/Owolabenjade/TariffShield/commit/0e69ba2))
+* feat: collateral cap, dispute window, audit history, surety license verification ([553228d](https://github.com/Owolabenjade/TariffShield/commit/553228d)), closes [#324](https://github.com/Owolabenjade/TariffShield/issues/324) [#326](https://github.com/Owolabenjade/TariffShield/issues/326) [#331](https://github.com/Owolabenjade/TariffShield/issues/331) [#326](https://github.com/Owolabenjade/TariffShield/issues/326) [#16](https://github.com/Owolabenjade/TariffShield/issues/16) [#331](https://github.com/Owolabenjade/TariffShield/issues/331) [#336](https://github.com/Owolabenjade/TariffShield/issues/336) [#17](https://github.com/Owolabenjade/TariffShield/issues/17) [#18](https://github.com/Owolabenjade/TariffShield/issues/18) [#19](https://github.com/Owolabenjade/TariffShield/issues/19) [#324](https://github.com/Owolabenjade/TariffShield/issues/324)
+* feat: implement emergency oracle overrides and terms of service tracking ([1fa0076](https://github.com/Owolabenjade/TariffShield/commit/1fa0076))
+* feat: implement security and compliance pipelines ([c47cb0d](https://github.com/Owolabenjade/TariffShield/commit/c47cb0d))
+* feat: Implement staleness, CBP, AML, and Oracle monitoring ([c8e60f7](https://github.com/Owolabenjade/TariffShield/commit/c8e60f7)), closes [#327](https://github.com/Owolabenjade/TariffShield/issues/327) [#330](https://github.com/Owolabenjade/TariffShield/issues/330) [#333](https://github.com/Owolabenjade/TariffShield/issues/333) [#311](https://github.com/Owolabenjade/TariffShield/issues/311)
+* feat: integrate Sentry error tracking for API and nextjs client ([0d2303d](https://github.com/Owolabenjade/TariffShield/commit/0d2303d))
+* feat: KYC document storage, field encryption, compliance dashboard, monthly reports ([7ccf594](https://github.com/Owolabenjade/TariffShield/commit/7ccf594)), closes [#312](https://github.com/Owolabenjade/TariffShield/issues/312) [#314](https://github.com/Owolabenjade/TariffShield/issues/314) [#318](https://github.com/Owolabenjade/TariffShield/issues/318) [#319](https://github.com/Owolabenjade/TariffShield/issues/319)
+* feat: oracle role separation, SAML SSO, privacy policy versioning, bond e-signature ([c7b27b1](https://github.com/Owolabenjade/TariffShield/commit/c7b27b1)), closes [#339](https://github.com/Owolabenjade/TariffShield/issues/339) [#308](https://github.com/Owolabenjade/TariffShield/issues/308) [#322](https://github.com/Owolabenjade/TariffShield/issues/322) [#317](https://github.com/Owolabenjade/TariffShield/issues/317)
+* feat: resolve issues #313, #320, #328, #335 ([eca6051](https://github.com/Owolabenjade/TariffShield/commit/eca6051)), closes [#313](https://github.com/Owolabenjade/TariffShield/issues/313) [#320](https://github.com/Owolabenjade/TariffShield/issues/320) [#328](https://github.com/Owolabenjade/TariffShield/issues/328) [#335](https://github.com/Owolabenjade/TariffShield/issues/335) [#313](https://github.com/Owolabenjade/TariffShield/issues/313) [#320](https://github.com/Owolabenjade/TariffShield/issues/320) [#328](https://github.com/Owolabenjade/TariffShield/issues/328) [#13](https://github.com/Owolabenjade/TariffShield/issues/13) [#14](https://github.com/Owolabenjade/TariffShield/issues/14) [#335](https://github.com/Owolabenjade/TariffShield/issues/335)
+* feat(contract): add rate limiting, price oracle, and upgrade entrypoint ([21803bc](https://github.com/Owolabenjade/TariffShield/commit/21803bc))
+* feat(security): implement incident response playbook and security features ([38acc19](https://github.com/Owolabenjade/TariffShield/commit/38acc19)), closes [#323](https://github.com/Owolabenjade/TariffShield/issues/323) [#309](https://github.com/Owolabenjade/TariffShield/issues/309) [#343](https://github.com/Owolabenjade/TariffShield/issues/343) [#316](https://github.com/Owolabenjade/TariffShield/issues/316)
+* docs: add CHANGELOG.md with v0.1.0 entry and link from README ([5776114](https://github.com/Owolabenjade/TariffShield/commit/5776114)), closes [#303](https://github.com/Owolabenjade/TariffShield/issues/303) [#291](https://github.com/Owolabenjade/TariffShield/issues/291) [#307](https://github.com/Owolabenjade/TariffShield/issues/307) [#286](https://github.com/Owolabenjade/TariffShield/issues/286)
+* docs: add security model and Soroban primer (#297 #298) ([d2942d5](https://github.com/Owolabenjade/TariffShield/commit/d2942d5)), closes [#297](https://github.com/Owolabenjade/TariffShield/issues/297) [#298](https://github.com/Owolabenjade/TariffShield/issues/298) [#297](https://github.com/Owolabenjade/TariffShield/issues/297) [#298](https://github.com/Owolabenjade/TariffShield/issues/298)
+* docs: add tariff calculation methodology document ([9c9ec22](https://github.com/Owolabenjade/TariffShield/commit/9c9ec22)), closes [#300](https://github.com/Owolabenjade/TariffShield/issues/300) [#297](https://github.com/Owolabenjade/TariffShield/issues/297) [#298](https://github.com/Owolabenjade/TariffShield/issues/298) [#340](https://github.com/Owolabenjade/TariffShield/issues/340)
+* docs: update docs ([bfc938d](https://github.com/Owolabenjade/TariffShield/commit/bfc938d))
+* Add upgrade tooling suite and dependency graph visualization ([4752ddf](https://github.com/Owolabenjade/TariffShield/commit/4752ddf)), closes [#345](https://github.com/Owolabenjade/TariffShield/issues/345) [#348](https://github.com/Owolabenjade/TariffShield/issues/348) [#350](https://github.com/Owolabenjade/TariffShield/issues/350) [#363](https://github.com/Owolabenjade/TariffShield/issues/363)
+* Fix issues #346, #347, #359, and #352 ([9b26732](https://github.com/Owolabenjade/TariffShield/commit/9b26732)), closes [#346](https://github.com/Owolabenjade/TariffShield/issues/346) [#347](https://github.com/Owolabenjade/TariffShield/issues/347) [#359](https://github.com/Owolabenjade/TariffShield/issues/359) [#352](https://github.com/Owolabenjade/TariffShield/issues/352)
+* Fix issues #355, #344, #358, and #353 ([6b2c82e](https://github.com/Owolabenjade/TariffShield/commit/6b2c82e)), closes [#355](https://github.com/Owolabenjade/TariffShield/issues/355) [#344](https://github.com/Owolabenjade/TariffShield/issues/344) [#358](https://github.com/Owolabenjade/TariffShield/issues/358) [#353](https://github.com/Owolabenjade/TariffShield/issues/353)
+* quick fixes ([424c135](https://github.com/Owolabenjade/TariffShield/commit/424c135))
+* Description: TariffShield has no external uptime monitoring, so the team only discovers outages when ([8c9217a](https://github.com/Owolabenjade/TariffShield/commit/8c9217a))
+* Description: TariffShield stores bond balances in PostgreSQL as the system of record for the API, bu ([32bc2d7](https://github.com/Owolabenjade/TariffShield/commit/32bc2d7))
