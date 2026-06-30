@@ -110,9 +110,10 @@ impl TariffShieldContract {
         env.storage()
             .instance()
             .set(&DataKey::ProposalCounter, &0u64);
+        let empty_signers: Vec<Address> = Vec::new(&env);
         env.storage()
             .instance()
-            .set(&DataKey::OracleSigners, &oracle_signers);
+            .set(&DataKey::OracleSigners, &empty_signers);
         env.storage()
             .instance()
             .set(&DataKey::OracleThreshold, &2u32);
