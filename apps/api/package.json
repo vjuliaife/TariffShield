@@ -43,9 +43,9 @@
     "@types/debug": "^4.1.13",
     "@types/express": "^5.0.0",
     "@types/jsonwebtoken": "^9.0.7",
-    "@types/node": "^24.0.0",
+    "@types/node": "^26.1.0",
     "@types/pg": "^8.11.10",
-    "tsx": "^4.19.0",
-    "typescript": "^5.7.2"
+    "tsx": "^4.23.0",
+    "typescript": "^6.0.3"
   }
 }
