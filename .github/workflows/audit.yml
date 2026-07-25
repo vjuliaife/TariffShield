@@ -57,7 +57,7 @@ jobs:
           cargo audit --json > cargo-audit-report.json
 
       - name: Upload Cargo Audit Report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: cargo-audit-report.json
@@ -109,7 +109,7 @@ jobs:
           "
 
       - name: Upload NPM Audit Report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: npm-audit-report.json
