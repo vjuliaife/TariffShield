@@ -22,19 +22,19 @@
  * The listener handles both event shapes.
  */
 
-import pino from "pino";
-import * as Sentry from "@sentry/node";
-import { rpc, scValToNative, xdr } from "@stellar/stellar-sdk";
-import { pool } from "../db.js";
-import { env } from "../config/env.js";
-import { createRpcServer } from "../lib/soroban/rpcClient.js";
+import pino from 'pino';
+import * as Sentry from '@sentry/node';
+import { rpc, scValToNative } from '@stellar/stellar-sdk';
+import { pool } from '../db.js';
+import { env } from '../config/env.js';
+import { createRpcServer } from '../lib/soroban/rpcClient.js';
 
-const logger = pino({ name: "oracle-event-listener" });
+const logger = pino({ name: 'oracle-event-listener' });
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 /** Postgres primary key used in listener_state. */
-const STATE_KEY = "oracle_event_listener";
+const STATE_KEY = 'oracle_event_listener';
 
 /** How often to poll for new events (ms). */
 const POLL_INTERVAL_MS = 12_000; // ~2 Stellar ledgers at 5 s/ledger
@@ -65,8 +65,8 @@ export interface OracleFeedRow {
 
 export async function getListenerState(): Promise<number | null> {
   const r = await pool.query<{ last_ledger_sequence: number }>(
-    "SELECT last_ledger_sequence FROM listener_state WHERE id = $1",
-    [STATE_KEY],
+    'SELECT last_ledger_sequence FROM listener_state WHERE id = $1',
+    [STATE_KEY]
   );
   return r.rows[0]?.last_ledger_sequence ?? null;
 }
@@ -78,7 +78,7 @@ export async function setListenerState(ledgerSequence: number): Promise<void> {
      ON CONFLICT (id)
      DO UPDATE SET last_ledger_sequence = EXCLUDED.last_ledger_sequence,
                    updated_at = now()`,
-    [STATE_KEY, ledgerSequence],
+    [STATE_KEY, ledgerSequence]
   );
 }
 
@@ -99,7 +99,7 @@ interface ParsedOracleEvent {
  * Attempt to extract oracle event data from a raw Soroban event.
  * Returns null when the event does not match either expected shape.
  */
-function parseOracleEvent(event: rpc.Api.EventRecord): ParsedOracleEvent | null {
+function parseOracleEvent(event: any): ParsedOracleEvent | null {
   try {
     // Topics are XDR-encoded ScVal strings in the API response.
     const topics = event.topic; // ScVal[]
@@ -108,14 +108,14 @@ function parseOracleEvent(event: rpc.Api.EventRecord): ParsedOracleEvent | null 
 
     // Topic[0] is the event name symbol.
     const topicSymbol = scValToNative(topics[0]!) as unknown;
-    const isNormal = topicSymbol === "required";
-    const isEmergency = topicSymbol === "EmergencyOracleUpdate";
+    const isNormal = topicSymbol === 'required';
+    const isEmergency = topicSymbol === 'EmergencyOracleUpdate';
 
     if (!isNormal && !isEmergency) return null;
 
     // Topic[1] is the importer Address ScVal.
     const importerAddress = scValToNative(topics[1]!) as string;
-    if (!importerAddress || typeof importerAddress !== "string") return null;
+    if (!importerAddress || typeof importerAddress !== 'string') return null;
 
     // Data is a tuple ScVal.
     const dataVal = event.value; // ScVal
@@ -128,7 +128,7 @@ function parseOracleEvent(event: rpc.Api.EventRecord): ParsedOracleEvent | null 
     const newRequired = BigInt(String(dataNative[1]));
 
     // Emergency events have (old, new, ts, caller) in the data tuple.
-    let callerAddress = "";
+    let callerAddress = '';
     if (isEmergency && dataNative.length >= 4) {
       callerAddress = String(dataNative[3]);
     }
@@ -143,7 +143,7 @@ function parseOracleEvent(event: rpc.Api.EventRecord): ParsedOracleEvent | null 
       ledgerSequence: event.ledger,
     };
   } catch (err) {
-    logger.warn({ err, eventId: event.id }, "Failed to parse oracle event");
+    logger.warn({ err, eventId: event.id }, 'Failed to parse oracle event');
     return null;
   }
 }
@@ -158,8 +158,8 @@ function parseOracleEvent(event: rpc.Api.EventRecord): ParsedOracleEvent | null 
 export async function insertOracleFeedRow(parsed: ParsedOracleEvent): Promise<void> {
   // Resolve importer_id (nullable — address may not exist in the DB yet).
   const importerRow = await pool.query<{ id: string }>(
-    "SELECT id FROM importers WHERE stellar_address = $1",
-    [parsed.importerAddress],
+    'SELECT id FROM importers WHERE stellar_address = $1',
+    [parsed.importerAddress]
   );
   const importerId: string | null = importerRow.rows[0]?.id ?? null;
 
@@ -187,7 +187,7 @@ export async function insertOracleFeedRow(parsed: ParsedOracleEvent): Promise<vo
       parsed.ledgerSequence,
       parsed.callerAddress,
       parsed.emergency,
-    ],
+    ]
   );
 }
 
@@ -211,7 +211,7 @@ export async function pollOracleEvents(rpcServer: rpc.Server): Promise<void> {
     fromLedger = Math.max(1, currentLedger - INITIAL_LOOKBACK_LEDGERS);
     logger.info(
       { fromLedger, currentLedger },
-      "[oracle-listener] No checkpoint found — replaying from initial lookback",
+      '[oracle-listener] No checkpoint found — replaying from initial lookback'
     );
   }
 
@@ -221,22 +221,19 @@ export async function pollOracleEvents(rpcServer: rpc.Server): Promise<void> {
   // Cap the window to avoid overloading the RPC node.
   const toLedger = Math.min(currentLedger, fromLedger + MAX_LEDGER_WINDOW);
 
-  logger.debug(
-    { fromLedger, toLedger, currentLedger },
-    "[oracle-listener] Polling events",
-  );
+  logger.debug({ fromLedger, toLedger, currentLedger }, '[oracle-listener] Polling events');
 
   const response = await rpcServer.getEvents({
     startLedger: fromLedger + 1,
     filters: [
       {
-        type: "contract",
+        type: 'contract',
         contractIds: [env.TARIFF_SHIELD_CONTRACT_ID],
         topics: [
           // Normal oracle update: ["required", <importer_address>]
-          ["required", "*"],
+          ['required', '*'],
           // Emergency oracle update: ["EmergencyOracleUpdate", <importer_address>]
-          ["EmergencyOracleUpdate", "*"],
+          ['EmergencyOracleUpdate', '*'],
         ],
       },
     ],
@@ -262,7 +259,7 @@ export async function pollOracleEvents(rpcServer: rpc.Server): Promise<void> {
     } catch (err) {
       logger.error(
         { err, txHash: parsed.txHash, importer: parsed.importerAddress },
-        "[oracle-listener] Failed to insert feed row",
+        '[oracle-listener] Failed to insert feed row'
       );
       Sentry.captureException(err);
     }
@@ -273,7 +270,7 @@ export async function pollOracleEvents(rpcServer: rpc.Server): Promise<void> {
   if (inserted > 0 || skipped > 0) {
     logger.info(
       { fromLedger: fromLedger + 1, toLedger, inserted, skipped },
-      "[oracle-listener] Poll cycle complete",
+      '[oracle-listener] Poll cycle complete'
     );
   }
 }
@@ -284,11 +281,11 @@ let intervalId: NodeJS.Timeout | null = null;
 
 export async function startOracleEventListener(): Promise<void> {
   if (intervalId) {
-    logger.warn("[oracle-listener] Already running");
+    logger.warn('[oracle-listener] Already running');
     return;
   }
 
-  logger.info("[oracle-listener] Starting oracle price feed event listener");
+  logger.info('[oracle-listener] Starting oracle price feed event listener');
 
   const rpcServer = createRpcServer(env.STELLAR_RPC_URL);
 
@@ -296,7 +293,7 @@ export async function startOracleEventListener(): Promise<void> {
   try {
     await pollOracleEvents(rpcServer);
   } catch (err) {
-    logger.error({ err }, "[oracle-listener] First poll failed");
+    logger.error({ err }, '[oracle-listener] First poll failed');
     Sentry.captureException(err);
   }
 
@@ -304,7 +301,7 @@ export async function startOracleEventListener(): Promise<void> {
     try {
       await pollOracleEvents(rpcServer);
     } catch (err) {
-      logger.error({ err }, "[oracle-listener] Poll cycle error");
+      logger.error({ err }, '[oracle-listener] Poll cycle error');
       Sentry.captureException(err);
     }
   }, POLL_INTERVAL_MS);
@@ -314,6 +311,6 @@ export function stopOracleEventListener(): void {
   if (intervalId) {
     clearInterval(intervalId);
     intervalId = null;
-    logger.info("[oracle-listener] Stopped");
+    logger.info('[oracle-listener] Stopped');
   }
 }

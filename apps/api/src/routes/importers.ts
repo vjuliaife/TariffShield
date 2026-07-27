@@ -26,50 +26,50 @@ const CreateImporterSchema = z.object({
   businessState: z.string().length(2).toUpperCase().optional(),
 });
 
-importersRouter.post("/", async (req: Request, res: Response) => {
+importersRouter.post('/', async (req: Request, res: Response) => {
   const user = (req as AuthedRequest).user;
-  if (user.role !== "importer") {
-    res.status(403).json({ error: "only importer accounts can register" });
+  if (user.role !== 'importer') {
+    res.status(403).json({ error: 'only importer accounts can register' });
     return;
   }
 
   const parse = CreateImporterSchema.safeParse(req.body);
   if (!parse.success) {
-    res.status(400).json({ error: "invalid input", details: parse.error.issues });
+    res.status(400).json({ error: 'invalid input', details: parse.error.issues });
     return;
   }
   const { legalName, ein, bondId, initialRequiredCollateral, businessState } = parse.data;
 
   const ofacClear = await screenImporterEntity(legalName, ein);
   if (!ofacClear) {
-    res.status(403).json({ error: "Importer failed OFAC sanctions screening" });
+    res.status(403).json({ error: 'Importer failed OFAC sanctions screening' });
     return;
   }
 
-  const existing = await pool.query("SELECT id FROM importers WHERE user_id = $1", [user.id]);
+  const existing = await pool.query('SELECT id FROM importers WHERE user_id = $1', [user.id]);
   if (existing.rowCount && existing.rowCount > 0) {
-    res.status(409).json({ error: "importer already registered for this user" });
+    res.status(409).json({ error: 'importer already registered for this user' });
     return;
   }
 
   const kp = Keypair.random();
 
   const amlRes = await screenWalletAddress(kp.publicKey());
-  if (amlRes.riskScore === "HIGH") {
-    res.status(403).json({ error: "Wallet address flagged as high risk by AML provider" });
+  if (amlRes.riskScore === 'HIGH') {
+    res.status(403).json({ error: 'Wallet address flagged as high risk by AML provider' });
     return;
   }
 
   const bondValidation = validateBondForm301({
     principalLegalName: legalName,
     principalEin: ein,
-    bondTypeCode: "02",
+    bondTypeCode: '02',
     bondAmount: BigInt(initialRequiredCollateral),
   });
 
   if (!bondValidation.valid) {
     res.status(422).json({
-      error: "Bond validation failed",
+      error: 'Bond validation failed',
       details: bondValidation.errors,
     });
     return;
@@ -79,7 +79,7 @@ importersRouter.post("/", async (req: Request, res: Response) => {
     `INSERT INTO importers (user_id, legal_name, ein, bond_id, stellar_address, stellar_secret_encrypted, business_state)
      VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING id, legal_name, ein, bond_id, stellar_address, created_at`,
-    [user.id, legalName, ein ?? null, bondId, kp.publicKey(), kp.secret(), businessState ?? "CA"],
+    [user.id, legalName, ein ?? null, bondId, kp.publicKey(), kp.secret(), businessState ?? 'CA']
   );
   const importer = inserted.rows[0]!;
 
@@ -87,7 +87,21 @@ importersRouter.post("/", async (req: Request, res: Response) => {
     `INSERT INTO bond_records (importer_id, bond_id, bond_type_code, principal_legal_name, principal_ein,
                                surety_company_name, surety_fein, bond_amount, cbp_minimum_required, effective_date, template_version, cbp_regulation_revision_date, state_code)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
-    [importer.id, bondId, "02", legalName, ein ?? null, "TBD", "TBD", initialRequiredCollateral, bondValidation.minimumRequired.toString(), new Date(), "1.0", new Date(), businessState ?? "CA"],
+    [
+      importer.id,
+      bondId,
+      '02',
+      legalName,
+      ein ?? null,
+      'TBD',
+      'TBD',
+      initialRequiredCollateral,
+      bondValidation.minimumRequired.toString(),
+      new Date(),
+      '1.0',
+      new Date(),
+      businessState ?? 'CA',
+    ]
   );
 
   // Fund the importer account via friendbot (testnet only)
@@ -95,7 +109,7 @@ importersRouter.post("/", async (req: Request, res: Response) => {
     const friendbotRes = await fetch(`https://friendbot.stellar.org/?addr=${kp.publicKey()}`);
     if (!friendbotRes.ok) throw new Error(`friendbot ${friendbotRes.status}`);
   } catch (err) {
-    console.error("[importers] friendbot fund failed:", err);
+    console.error('[importers] friendbot fund failed:', err);
   }
 
   // Register importer on-chain. Platform admin signs.
@@ -103,10 +117,10 @@ importersRouter.post("/", async (req: Request, res: Response) => {
     platformKeypair,
     kp.publicKey(),
     BigInt(bondId),
-    BigInt(initialRequiredCollateral),
+    BigInt(initialRequiredCollateral)
   );
 
-  await pool.query("UPDATE importers SET registered_on_chain_tx = $1 WHERE id = $2", [
+  await pool.query('UPDATE importers SET registered_on_chain_tx = $1 WHERE id = $2', [
     onChain.txHash,
     importer.id,
   ]);
@@ -114,7 +128,7 @@ importersRouter.post("/", async (req: Request, res: Response) => {
     `INSERT INTO contract_events (importer_id, kind, tx_hash, ledger_sequence, event_index)
      VALUES ($1, $2, $3, $4, $5)
      ON CONFLICT (ledger_sequence, event_index) DO NOTHING`,
-    [importer.id, "register", onChain.txHash, onChain.ledgerSequence, onChain.applicationOrder],
+    [importer.id, 'register', onChain.txHash, onChain.ledgerSequence, onChain.applicationOrder]
   );
 
   await logAudit(user.id, "register", importer.id, { legalName, bondId });
@@ -134,20 +148,20 @@ importersRouter.post("/", async (req: Request, res: Response) => {
   });
 });
 
-importersRouter.get("/", async (req: Request, res: Response) => {
+importersRouter.get('/', async (req: Request, res: Response) => {
   const user = (req as AuthedRequest).user;
   let r;
-  if (user.role === "surety_admin") {
+  if (user.role === 'surety_admin') {
     r = await pool.query(
       `SELECT i.id, i.legal_name, i.bond_id, i.stellar_address, i.created_at, u.email
          FROM importers i JOIN users u ON u.id = i.user_id
-         ORDER BY i.created_at DESC`,
+         ORDER BY i.created_at DESC`
     );
   } else {
     r = await pool.query(
       `SELECT i.id, i.legal_name, i.bond_id, i.stellar_address, i.created_at
          FROM importers i WHERE i.user_id = $1`,
-      [user.id],
+      [user.id]
     );
   }
   res.json({ importers: r.rows });
@@ -157,33 +171,105 @@ importersRouter.get("/", async (req: Request, res: Response) => {
 // (a materialized view refreshed on a 5-minute schedule — see
 // jobs/refresh-importer-metrics.ts) instead of live GROUP BY queries.
 // Registered before "/:id" so Express doesn't treat "stats" as an :id param.
-importersRouter.get("/stats", async (req: Request, res: Response) => {
+importersRouter.get('/stats', async (req: Request, res: Response) => {
   const user = (req as AuthedRequest).user;
-  if (user.role !== "surety_admin") {
-    res.status(403).json({ error: "surety admin only" });
+  if (user.role !== 'surety_admin') {
+    res.status(403).json({ error: 'surety admin only' });
     return;
   }
   const metrics = await getImporterMetrics();
   res.json({ metrics });
 });
 
+const AdminEventsQuerySchema = z.object({
+  from: z.string().datetime({ message: "Invalid 'from' timestamp, must be ISO 8601" }).optional(),
+  to: z.string().datetime({ message: "Invalid 'to' timestamp, must be ISO 8601" }).optional(),
+  limit: z.coerce.number().int().positive().max(500).default(500),
+  offset: z.coerce.number().int().nonnegative().default(0),
+});
+
+// #245: Admin events endpoint for time-range reporting.
+// Fetches contract events within a specified range, optimized via the BRIN index.
+importersRouter.get('/admin/events', async (req: Request, res: Response) => {
+  const user = (req as AuthedRequest).user;
+  if (user.role !== 'surety_admin') {
+    res.status(403).json({ error: 'surety admin only' });
+    return;
+  }
+
+  const parse = AdminEventsQuerySchema.safeParse(req.query);
+  if (!parse.success) {
+    res.status(400).json({ error: 'invalid query parameters', details: parse.error.issues });
+    return;
+  }
+
+  const { limit, offset, from, to } = parse.data;
+
+  const queryParams: any[] = [];
+  let sql = `
+    SELECT id, importer_id, kind, amount, tx_hash, created_at, ledger_sequence, event_index
+    FROM contract_events
+  `;
+  const conditions: string[] = [];
+
+  if (from) {
+    queryParams.push(from);
+    conditions.push(`created_at >= $${queryParams.length}`);
+  }
+  if (to) {
+    queryParams.push(to);
+    conditions.push(`created_at <= $${queryParams.length}`);
+  }
+
+  if (conditions.length > 0) {
+    sql += ' WHERE ' + conditions.join(' AND ');
+  }
+
+  sql += ' ORDER BY created_at DESC, id DESC';
+
+  queryParams.push(limit);
+  sql += ` LIMIT $${queryParams.length}`;
+
+  queryParams.push(offset);
+  sql += ` OFFSET $${queryParams.length}`;
+
+  try {
+    const result = await pool.query(sql, queryParams);
+    const events = result.rows.map((row) => ({
+      id: row.id,
+      importerId: row.importer_id,
+      kind: row.kind,
+      amount: row.amount,
+      txHash: row.tx_hash,
+      txUrl: row.tx_hash ? explorerTx(row.tx_hash) : null,
+      createdAt: row.created_at,
+      ledgerSequence: row.ledger_sequence,
+      eventIndex: row.event_index,
+    }));
+    res.json({ events });
+  } catch (err: any) {
+    console.error('[importers] Failed to query admin events:', err);
+    res.status(500).json({ error: 'failed to retrieve events' });
+  }
+});
+
 async function loadImporterFor(req: Request, importerId: string) {
   const user = (req as AuthedRequest).user;
-  if (user.role === "surety_admin") {
-    const r = await pool.query("SELECT * FROM importers WHERE id = $1", [importerId]);
+  if (user.role === 'surety_admin') {
+    const r = await pool.query('SELECT * FROM importers WHERE id = $1', [importerId]);
     return r.rows[0] ?? null;
   }
-  const r = await pool.query("SELECT * FROM importers WHERE id = $1 AND user_id = $2", [
+  const r = await pool.query('SELECT * FROM importers WHERE id = $1 AND user_id = $2', [
     importerId,
     user.id,
   ]);
   return r.rows[0] ?? null;
 }
 
-importersRouter.get("/:id", async (req: Request, res: Response) => {
-  const importer = await loadImporterFor(req, String(req.params.id ?? ""));
+importersRouter.get('/:id', async (req: Request, res: Response) => {
+  const importer = await loadImporterFor(req, String(req.params.id ?? ''));
   if (!importer) {
-    res.status(404).json({ error: "not found" });
+    res.status(404).json({ error: 'not found' });
     return;
   }
   const acct = await contractClient.getAccount(importer.stellar_address);
@@ -217,8 +303,8 @@ importersRouter.get("/:id", async (req: Request, res: Response) => {
 // events share the same created_at timestamp.
 function decodeEventsCursor(raw: string): { createdAt: string; id: string } | null {
   try {
-    const decoded = Buffer.from(raw, "base64").toString("utf8");
-    const sep = decoded.lastIndexOf("|");
+    const decoded = Buffer.from(raw, 'base64').toString('utf8');
+    const sep = decoded.lastIndexOf('|');
     if (sep === -1) return null;
     return { createdAt: decoded.slice(0, sep), id: decoded.slice(sep + 1) };
   } catch {
@@ -227,7 +313,7 @@ function decodeEventsCursor(raw: string): { createdAt: string; id: string } | nu
 }
 
 function encodeEventsCursor(createdAt: Date, id: string): string {
-  return Buffer.from(`${createdAt.toISOString()}|${id}`, "utf8").toString("base64");
+  return Buffer.from(`${createdAt.toISOString()}|${id}`, 'utf8').toString('base64');
 }
 
 const EventsQuerySchema = z.object({
@@ -235,16 +321,16 @@ const EventsQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(100).default(20),
 });
 
-importersRouter.get("/:id/events", async (req: Request, res: Response) => {
-  const importer = await loadImporterFor(req, String(req.params.id ?? ""));
+importersRouter.get('/:id/events', async (req: Request, res: Response) => {
+  const importer = await loadImporterFor(req, String(req.params.id ?? ''));
   if (!importer) {
-    res.status(404).json({ error: "not found" });
+    res.status(404).json({ error: 'not found' });
     return;
   }
 
   const parse = EventsQuerySchema.safeParse(req.query);
   if (!parse.success) {
-    res.status(400).json({ error: "invalid query", details: parse.error.issues });
+    res.status(400).json({ error: 'invalid query', details: parse.error.issues });
     return;
   }
   const { limit } = parse.data;
@@ -253,7 +339,7 @@ importersRouter.get("/:id/events", async (req: Request, res: Response) => {
   if (parse.data.cursor) {
     cursor = decodeEventsCursor(parse.data.cursor);
     if (!cursor) {
-      res.status(400).json({ error: "invalid cursor" });
+      res.status(400).json({ error: 'invalid cursor' });
       return;
     }
   }
@@ -263,13 +349,13 @@ importersRouter.get("/:id/events", async (req: Request, res: Response) => {
         `SELECT id, kind, amount, tx_hash, created_at FROM contract_events
          WHERE importer_id = $1 AND (created_at, id) < ($2::timestamptz, $3::uuid)
          ORDER BY created_at DESC, id DESC LIMIT $4`,
-        [importer.id, cursor.createdAt, cursor.id, limit],
+        [importer.id, cursor.createdAt, cursor.id, limit]
       )
     : await pool.query(
         `SELECT id, kind, amount, tx_hash, created_at FROM contract_events
          WHERE importer_id = $1
          ORDER BY created_at DESC, id DESC LIMIT $2`,
-        [importer.id, limit],
+        [importer.id, limit]
       );
 
   const events = rows.rows.map((e) => ({
@@ -288,10 +374,10 @@ importersRouter.get("/:id/events", async (req: Request, res: Response) => {
   res.json({ events, nextCursor });
 });
 
-importersRouter.get("/:id/collateral-status", async (req: Request, res: Response) => {
-  const importer = await loadImporterFor(req, String(req.params.id ?? ""));
+importersRouter.get('/:id/collateral-status', async (req: Request, res: Response) => {
+  const importer = await loadImporterFor(req, String(req.params.id ?? ''));
   if (!importer) {
-    res.status(404).json({ error: "not found" });
+    res.status(404).json({ error: 'not found' });
     return;
   }
   const acct = await contractClient.getAccount(importer.stellar_address);
@@ -304,7 +390,6 @@ importersRouter.get("/:id/collateral-status", async (req: Request, res: Response
     expiresAt: new Date(expiresAtSeconds * 1000).toISOString(),
   });
 });
-
 
 // --- Synthetic CBP tariff CSV upload — recomputes required_collateral on-chain ---
 
@@ -323,12 +408,12 @@ importersRouter.post("/:id/upload-tariff-csv", async (req: Request, res: Respons
   const user = (req as AuthedRequest).user;
   const importer = await loadImporterFor(req, String(req.params.id ?? ""));
   if (!importer) {
-    res.status(404).json({ error: "not found" });
+    res.status(404).json({ error: 'not found' });
     return;
   }
   const parse = TariffUploadSchema.safeParse(req.body);
   if (!parse.success) {
-    res.status(400).json({ error: "invalid input", details: parse.error.issues });
+    res.status(400).json({ error: 'invalid input', details: parse.error.issues });
     return;
   }
 
@@ -339,12 +424,12 @@ importersRouter.post("/:id/upload-tariff-csv", async (req: Request, res: Respons
     parse.data.lineItems.map((item) => ({
       hts_code: item.htsCode,
       declared_rate: item.dutyRate,
-    })),
+    }))
   );
 
   if (htsValidation.hasBlockingErrors) {
     res.status(422).json({
-      error: "HTS rate validation failed: one or more line items are underreported",
+      error: 'HTS rate validation failed: one or more line items are underreported',
       flagged: htsValidation.blocking.map((r) => ({
         htsCode: r.hts_code,
         declaredRate: r.declared_rate,
@@ -372,16 +457,16 @@ importersRouter.post("/:id/upload-tariff-csv", async (req: Request, res: Respons
   for (const item of parse.data.lineItems) {
     const cbpRes = await lookupCbpDutyRate(item.htsCode);
     const cbpRate = cbpRes.dutyRate ?? item.dutyRate;
-    
+
     const deviation = Math.abs(cbpRate - item.dutyRate);
-    if (cbpRate > 0 && deviation / cbpRate > 0.10) {
+    if (cbpRate > 0 && deviation / cbpRate > 0.1) {
       validationReport.push({
         htsCode: item.htsCode,
         reportedRate: item.dutyRate,
         cbpRate: cbpRate,
         deviation,
       });
-      if (env.CBP_VALIDATION_MODE !== "warn") {
+      if (env.CBP_VALIDATION_MODE !== 'warn') {
         hasBlockError = true;
       }
     }
@@ -389,7 +474,7 @@ importersRouter.post("/:id/upload-tariff-csv", async (req: Request, res: Respons
   }
 
   if (hasBlockError) {
-    res.status(422).json({ error: "CBP validation failed", report: validationReport });
+    res.status(422).json({ error: 'CBP validation failed', report: validationReport });
     return;
   }
 
@@ -406,17 +491,29 @@ importersRouter.post("/:id/upload-tariff-csv", async (req: Request, res: Respons
       importer.stellar_address,
       requiredStroops,
       env.PRICE_ORACLE_CONTRACT_ID,
-      false,
+      false
     );
     await pool.query(
-      "INSERT INTO tariff_uploads (importer_id, filename, annual_duty_total, computed_required_collateral, applied_tx) VALUES ($1, $2, $3, $4, $5)",
-      [importer.id, parse.data.filename ?? null, annualDutyTotal, requiredStroops.toString(), onChain.txHash],
+      'INSERT INTO tariff_uploads (importer_id, filename, annual_duty_total, computed_required_collateral, applied_tx) VALUES ($1, $2, $3, $4, $5)',
+      [
+        importer.id,
+        parse.data.filename ?? null,
+        annualDutyTotal,
+        requiredStroops.toString(),
+        onChain.txHash,
+      ]
     );
     await pool.query(
       `INSERT INTO contract_events (importer_id, kind, amount, tx_hash, ledger_sequence, event_index)
        VALUES ($1, 'required_changed', $2, $3, $4, $5)
        ON CONFLICT (ledger_sequence, event_index) DO NOTHING`,
-      [importer.id, requiredStroops.toString(), onChain.txHash, onChain.ledgerSequence, onChain.applicationOrder],
+      [
+        importer.id,
+        requiredStroops.toString(),
+        onChain.txHash,
+        onChain.ledgerSequence,
+        onChain.applicationOrder,
+      ]
     );
 
     await logAudit(user.id, "apply_tariff_upload", importer.id, { filename: parse.data.filename, annualDutyTotal, requiredStroops: requiredStroops.toString() });
@@ -431,15 +528,13 @@ importersRouter.post("/:id/upload-tariff-csv", async (req: Request, res: Respons
     });
   } catch (err: any) {
     const errMsg = String(err);
-    if (errMsg.includes("Error(Contract, #13)") || errMsg.includes("RateLimitExceeded")) {
+    if (errMsg.includes('Error(Contract, #13)') || errMsg.includes('RateLimitExceeded')) {
       const retryAfter = Math.ceil(Date.now() / 1000) + 86400;
-      res.status(429)
-        .set("Retry-After", String(retryAfter))
-        .json({
-          error: "rate limit exceeded",
-          retryAfter,
-          message: "collateral requirements can only be updated once per 24 hours",
-        });
+      res.status(429).set('Retry-After', String(retryAfter)).json({
+        error: 'rate limit exceeded',
+        retryAfter,
+        message: 'collateral requirements can only be updated once per 24 hours',
+      });
       return;
     }
     throw err;
@@ -448,21 +543,21 @@ importersRouter.post("/:id/upload-tariff-csv", async (req: Request, res: Respons
 
 const DepositSchema = z.object({
   amountStroops: z.string().regex(/^\d+$/),
-  bucket: z.enum(["collateral", "reserve"]),
+  bucket: z.enum(['collateral', 'reserve']),
 });
 
 importersRouter.post("/:id/deposit", async (req: Request, res: Response) => {
   const user = (req as AuthedRequest).user;
   const importer = await loadImporterFor(req, String(req.params.id ?? ""));
   if (!importer) {
-    res.status(404).json({ error: "not found" });
+    res.status(404).json({ error: 'not found' });
     return;
   }
 
   // #312: block collateral deposits until KYC is approved (CIP compliance)
-  if (importer.kyc_status !== "approved") {
+  if (importer.kyc_status !== 'approved') {
     res.status(403).json({
-      error: "KYC approval required before collateral deposits",
+      error: 'KYC approval required before collateral deposits',
       kycStatus: importer.kyc_status,
     });
     return;
@@ -470,18 +565,18 @@ importersRouter.post("/:id/deposit", async (req: Request, res: Response) => {
 
   const parse = DepositSchema.safeParse(req.body);
   if (!parse.success) {
-    res.status(400).json({ error: "invalid input" });
+    res.status(400).json({ error: 'invalid input' });
     return;
   }
 
   const amlRes = await screenWalletAddress(importer.stellar_address);
-  if (amlRes.riskScore === "HIGH") {
-    res.status(403).json({ error: "Transaction blocked pending AML review" });
+  if (amlRes.riskScore === 'HIGH') {
+    res.status(403).json({ error: 'Transaction blocked pending AML review' });
     return;
   }
 
   const jobId = await enqueueTxSubmit({
-    method: "deposit",
+    method: 'deposit',
     importerId: importer.id,
     keypairSecret: importer.stellar_secret_encrypted,
     args: {
@@ -495,14 +590,14 @@ importersRouter.post("/:id/deposit", async (req: Request, res: Response) => {
   res.status(202).json({ jobId, statusUrl: `/importers/${importer.id}/tx-status/${jobId}` });
 });
 
-importersRouter.post("/:id/auto-top-up", async (req: Request, res: Response) => {
-  const importer = await loadImporterFor(req, String(req.params.id ?? ""));
+importersRouter.post('/:id/auto-top-up', async (req: Request, res: Response) => {
+  const importer = await loadImporterFor(req, String(req.params.id ?? ''));
   if (!importer) {
-    res.status(404).json({ error: "not found" });
+    res.status(404).json({ error: 'not found' });
     return;
   }
   const jobId = await enqueueTxSubmit({
-    method: "auto_top_up",
+    method: 'auto_top_up',
     importerId: importer.id,
     platformKey: true,
     args: {
@@ -520,23 +615,23 @@ importersRouter.post("/:id/withdraw", async (req: Request, res: Response) => {
   const user = (req as AuthedRequest).user;
   const importer = await loadImporterFor(req, String(req.params.id ?? ""));
   if (!importer) {
-    res.status(404).json({ error: "not found" });
+    res.status(404).json({ error: 'not found' });
     return;
   }
   const parse = WithdrawSchema.safeParse(req.body);
   if (!parse.success) {
-    res.status(400).json({ error: "invalid input" });
+    res.status(400).json({ error: 'invalid input' });
     return;
   }
 
   const amlRes = await screenWalletAddress(importer.stellar_address);
-  if (amlRes.riskScore === "HIGH") {
-    res.status(403).json({ error: "Transaction blocked pending AML review" });
+  if (amlRes.riskScore === 'HIGH') {
+    res.status(403).json({ error: 'Transaction blocked pending AML review' });
     return;
   }
 
   const jobId = await enqueueTxSubmit({
-    method: "withdraw",
+    method: 'withdraw',
     importerId: importer.id,
     keypairSecret: importer.stellar_secret_encrypted,
     args: {
@@ -553,55 +648,63 @@ importersRouter.post("/:id/withdraw", async (req: Request, res: Response) => {
 
 const YieldSchema = z.object({ amountStroops: z.string().regex(/^\d+$/) });
 
-importersRouter.post("/:id/accrue-yield", requireLicenseVerified, async (req: Request, res: Response) => {
-  const user = (req as AuthedRequest).user;
-  if (user.role !== "surety_admin") {
-    res.status(403).json({ error: "surety admin only" });
-    return;
+importersRouter.post(
+  '/:id/accrue-yield',
+  requireLicenseVerified,
+  async (req: Request, res: Response) => {
+    const user = (req as AuthedRequest).user;
+    if (user.role !== 'surety_admin') {
+      res.status(403).json({ error: 'surety admin only' });
+      return;
+    }
+    const importer = await loadImporterFor(req, String(req.params.id ?? ''));
+    if (!importer) {
+      res.status(404).json({ error: 'not found' });
+      return;
+    }
+    const parse = YieldSchema.safeParse(req.body);
+    if (!parse.success) {
+      res.status(400).json({ error: 'invalid input' });
+      return;
+    }
+    const jobId = await enqueueTxSubmit({
+      method: 'accrue_yield',
+      importerId: importer.id,
+      platformKey: true,
+      args: {
+        importerAddress: importer.stellar_address,
+        amountStroops: parse.data.amountStroops,
+      },
+    });
+    res.status(202).json({ jobId, statusUrl: `/importers/${importer.id}/tx-status/${jobId}` });
   }
-  const importer = await loadImporterFor(req, String(req.params.id ?? ""));
-  if (!importer) {
-    res.status(404).json({ error: "not found" });
-    return;
-  }
-  const parse = YieldSchema.safeParse(req.body);
-  if (!parse.success) {
-    res.status(400).json({ error: "invalid input" });
-    return;
-  }
-  const jobId = await enqueueTxSubmit({
-    method: "accrue_yield",
-    importerId: importer.id,
-    platformKey: true,
-    args: {
-      importerAddress: importer.stellar_address,
-      amountStroops: parse.data.amountStroops,
-    },
-  });
-  res.status(202).json({ jobId, statusUrl: `/importers/${importer.id}/tx-status/${jobId}` });
-});
+);
 
-importersRouter.post("/:id/clawback", requireLicenseVerified, async (req: Request, res: Response) => {
-  const user = (req as AuthedRequest).user;
-  if (user.role !== "surety_admin") {
-    res.status(403).json({ error: "surety admin only" });
-    return;
+importersRouter.post(
+  '/:id/clawback',
+  requireLicenseVerified,
+  async (req: Request, res: Response) => {
+    const user = (req as AuthedRequest).user;
+    if (user.role !== 'surety_admin') {
+      res.status(403).json({ error: 'surety admin only' });
+      return;
+    }
+    const importer = await loadImporterFor(req, String(req.params.id ?? ''));
+    if (!importer) {
+      res.status(404).json({ error: 'not found' });
+      return;
+    }
+    const jobId = await enqueueTxSubmit({
+      method: 'clawback',
+      importerId: importer.id,
+      suretyKey: true,
+      args: {
+        importerAddress: importer.stellar_address,
+      },
+    });
+    res.status(202).json({ jobId, statusUrl: `/importers/${importer.id}/tx-status/${jobId}` });
   }
-  const importer = await loadImporterFor(req, String(req.params.id ?? ""));
-  if (!importer) {
-    res.status(404).json({ error: "not found" });
-    return;
-  }
-  const jobId = await enqueueTxSubmit({
-    method: "clawback",
-    importerId: importer.id,
-    suretyKey: true,
-    args: {
-      importerAddress: importer.stellar_address,
-    },
-  });
-  res.status(202).json({ jobId, statusUrl: `/importers/${importer.id}/tx-status/${jobId}` });
-});
+);
 
 // ── Issue #335: Oracle data reconciliation endpoint ───────────────────────────
 
@@ -609,43 +712,46 @@ const VerifyOracleSchema = z.object({
   as_of_date: z.string().datetime().optional(),
 });
 
-importersRouter.post("/:id/verify-oracle-data", async (req: Request, res: Response) => {
+importersRouter.post('/:id/verify-oracle-data', async (req: Request, res: Response) => {
   const user = (req as AuthedRequest).user;
-  const importerId = String(req.params.id ?? "");
+  const importerId = String(req.params.id ?? '');
 
   // Accessible by: the importer themselves, surety_admin, or platform admin (surety_admin covers both)
   let importer: Record<string, unknown> | null = null;
-  if (user.role === "surety_admin") {
-    const r = await pool.query("SELECT * FROM importers WHERE id = $1", [importerId]);
+  if (user.role === 'surety_admin') {
+    const r = await pool.query('SELECT * FROM importers WHERE id = $1', [importerId]);
     importer = r.rows[0] ?? null;
   } else {
-    const r = await pool.query("SELECT * FROM importers WHERE id = $1 AND user_id = $2", [importerId, user.id]);
+    const r = await pool.query('SELECT * FROM importers WHERE id = $1 AND user_id = $2', [
+      importerId,
+      user.id,
+    ]);
     importer = r.rows[0] ?? null;
   }
   if (!importer) {
-    res.status(404).json({ error: "not found" });
+    res.status(404).json({ error: 'not found' });
     return;
   }
 
   const parse = VerifyOracleSchema.safeParse(req.body);
   if (!parse.success) {
-    res.status(400).json({ error: "invalid input", details: parse.error.issues });
+    res.status(400).json({ error: 'invalid input', details: parse.error.issues });
     return;
   }
 
   // Fetch latest tariff upload for this importer
   const uploadQ = parse.data.as_of_date
     ? await pool.query(
-        "SELECT * FROM tariff_uploads WHERE importer_id = $1 AND created_at <= $2 ORDER BY created_at DESC LIMIT 1",
-        [importerId, parse.data.as_of_date],
+        'SELECT * FROM tariff_uploads WHERE importer_id = $1 AND created_at <= $2 ORDER BY created_at DESC LIMIT 1',
+        [importerId, parse.data.as_of_date]
       )
     : await pool.query(
-        "SELECT * FROM tariff_uploads WHERE importer_id = $1 ORDER BY created_at DESC LIMIT 1",
-        [importerId],
+        'SELECT * FROM tariff_uploads WHERE importer_id = $1 ORDER BY created_at DESC LIMIT 1',
+        [importerId]
       );
 
   if (!uploadQ.rowCount || uploadQ.rowCount === 0) {
-    res.status(404).json({ error: "no tariff CSV data found for this importer" });
+    res.status(404).json({ error: 'no tariff CSV data found for this importer' });
     return;
   }
   const upload = uploadQ.rows[0]!;
@@ -655,8 +761,8 @@ importersRouter.post("/:id/verify-oracle-data", async (req: Request, res: Respon
   const computed = BigInt(Math.round(annualDuty * 0.1 * 0.5 * 1e7));
 
   // CSV hash — hash the stored annual_duty_total + filename as a stable fingerprint
-  const csvFingerprint = `${upload.filename ?? ""}:${upload.annual_duty_total}`;
-  const csvHash = createHash("sha256").update(csvFingerprint).digest("hex");
+  const csvFingerprint = `${upload.filename ?? ''}:${upload.annual_duty_total}`;
+  const csvHash = createHash('sha256').update(csvFingerprint).digest('hex');
 
   // Fetch on-chain value
   const onChainStr = await getRequiredCollateralOnChain(importer.stellar_address as string);
@@ -664,9 +770,12 @@ importersRouter.post("/:id/verify-oracle-data", async (req: Request, res: Respon
 
   const computedNum = Number(computed);
   const onChainNum = Number(onChain);
-  const deviationPct = onChainNum === 0
-    ? (computedNum === 0 ? 0 : 100)
-    : Math.abs(computedNum - onChainNum) / onChainNum * 100;
+  const deviationPct =
+    onChainNum === 0
+      ? computedNum === 0
+        ? 0
+        : 100
+      : (Math.abs(computedNum - onChainNum) / onChainNum) * 100;
 
   const match = deviationPct <= 1.0;
 
@@ -676,7 +785,13 @@ importersRouter.post("/:id/verify-oracle-data", async (req: Request, res: Respon
       `INSERT INTO oracle_alerts (importer_id, old_value, new_value, pct_change, tx_hash)
        VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT DO NOTHING`,
-      [importerId, onChainStr, computed.toString(), deviationPct.toFixed(2), "reconciliation_failure"],
+      [
+        importerId,
+        onChainStr,
+        computed.toString(),
+        deviationPct.toFixed(2),
+        'reconciliation_failure',
+      ]
     );
   }
 
@@ -690,16 +805,16 @@ importersRouter.post("/:id/verify-oracle-data", async (req: Request, res: Respon
   });
 });
 
-importersRouter.get("/:id/tx-status/:jobId", async (req: Request, res: Response) => {
-  const importer = await loadImporterFor(req, String(req.params.id ?? ""));
+importersRouter.get('/:id/tx-status/:jobId', async (req: Request, res: Response) => {
+  const importer = await loadImporterFor(req, String(req.params.id ?? ''));
   if (!importer) {
-    res.status(404).json({ error: "not found" });
+    res.status(404).json({ error: 'not found' });
     return;
   }
 
-  const job = await txSubmitQueue.getJob(String(req.params.jobId ?? ""));
+  const job = await txSubmitQueue.getJob(String(req.params.jobId ?? ''));
   if (!job) {
-    res.status(404).json({ error: "job not found" });
+    res.status(404).json({ error: 'job not found' });
     return;
   }
 
@@ -708,9 +823,9 @@ importersRouter.get("/:id/tx-status/:jobId", async (req: Request, res: Response)
   const result = job.returnvalue;
   const failedReason = job.failedReason;
 
-  if (state === "completed") {
+  if (state === 'completed') {
     res.json({ state, result });
-  } else if (state === "failed") {
+  } else if (state === 'failed') {
     res.status(400).json({ state, error: failedReason });
   } else {
     res.json({ state, progress });
