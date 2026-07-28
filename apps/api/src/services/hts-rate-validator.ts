@@ -21,7 +21,7 @@ import { pool } from "../db.js";
 const logger = pino({ name: "hts-rate-validator" });
 
 /** Seven days in milliseconds. */
-const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const _CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Tolerance band: 5 % (0.05). */
 const TOLERANCE = 0.05;

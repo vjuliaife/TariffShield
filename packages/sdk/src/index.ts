@@ -123,15 +123,16 @@ export class TariffShieldClient {
   }
 
   async setRequiredCollateral(
-    signers: Keypair[],
+    signer: Keypair | Keypair[],
     importer: string,
     newRequired: bigint,
     priceOracleContract?: string,
     bypassRateLimit?: boolean,
     emergency?: boolean,
   ): Promise<InvokeResult<null>> {
+    const primarySigner = Array.isArray(signer) ? signer[0]! : signer;
     const args = [
-      addressToScVal(signer.publicKey()),
+      addressToScVal(primarySigner.publicKey()),
       addressToScVal(importer),
       nativeToScVal(newRequired, { type: "i128" }),
     ];
@@ -145,7 +146,7 @@ export class TariffShieldClient {
     args.push(nativeToScVal(bypassRateLimit ?? false, { type: "bool" }));
     args.push(nativeToScVal(emergency ?? false, { type: "bool" }));
 
-    return this.invokeAndSubmit(signer, "set_required_collateral", args);
+    return this.invokeAndSubmit(primarySigner, "set_required_collateral", args);
   }
 
   async autoTopUp(signer: Keypair, importer: string): Promise<InvokeResult<bigint>> {

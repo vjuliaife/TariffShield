@@ -1,10 +1,11 @@
 #![cfg(test)]
+#![allow(clippy::inconsistent_digit_grouping, clippy::bool_assert_comparison)]
 
 use super::*;
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
     token::{StellarAssetClient, TokenClient},
-    Env, IntoVal,
+    Env,
 };
 
 struct Setup<'a> {
@@ -114,9 +115,9 @@ fn register_importer_creates_zero_balance_account() {
     assert_eq!(acct.collateral_balance, 0);
     assert_eq!(acct.required_collateral, 100_000_0000000);
     assert_eq!(acct.reserve_balance, 0);
-    assert_eq!(acct.is_clawbacked, false);
+    assert!(!acct.is_clawbacked);
     assert_eq!(acct.oracle_last_updated, 0);
-    assert_eq!(acct.dispute_raised, false);
+    assert!(!acct.dispute_raised);
 }
 
 #[test]
@@ -270,7 +271,7 @@ fn clawback_drains_buckets_to_surety_and_freezes_account() {
     let acct = s.client.get_account(&s.importer);
     assert_eq!(acct.collateral_balance, 0);
     assert_eq!(acct.reserve_balance, 0);
-    assert_eq!(acct.is_clawbacked, true);
+    assert!(acct.is_clawbacked);
 }
 
 #[test]
@@ -325,13 +326,13 @@ fn staleness_checks_work() {
     });
     s.client
         .register_importer(&s.importer, &1, &100_000_0000000);
-    assert_eq!(s.client.is_collateral_stale(&s.importer), false);
+    assert!(!s.client.is_collateral_stale(&s.importer));
 
     // fast forward 366 days
     s.env.ledger().with_mut(|li| {
         li.timestamp = 100 + 366 * 86400;
     });
-    assert_eq!(s.client.is_collateral_stale(&s.importer), true);
+    assert!(s.client.is_collateral_stale(&s.importer));
 }
 
 #[test]
@@ -657,7 +658,7 @@ fn raise_dispute_suspends_enforcement_of_new_required() {
     s.client.raise_dispute(&s.importer);
 
     let acct = s.client.get_account(&s.importer);
-    assert_eq!(acct.dispute_raised, true);
+    assert!(acct.dispute_raised);
 
     // During dispute pre_dispute_required (50k) is enforced.
     // collateral=60k, effective_required=50k → excess=10k; withdrawal should succeed.
@@ -764,7 +765,7 @@ fn resolve_dispute_accepted_keeps_new_required() {
 
     let acct = s.client.get_account(&s.importer);
     assert_eq!(acct.required_collateral, 80_000_0000000);
-    assert_eq!(acct.dispute_raised, false);
+    assert!(!acct.dispute_raised);
     assert_eq!(acct.dispute_expires_at, 0);
 }
 
@@ -790,7 +791,7 @@ fn resolve_dispute_rejected_reverts_to_old_required() {
 
     let acct = s.client.get_account(&s.importer);
     assert_eq!(acct.required_collateral, 50_000_0000000);
-    assert_eq!(acct.dispute_raised, false);
+    assert!(!acct.dispute_raised);
 }
 
 #[test]
@@ -818,7 +819,7 @@ fn auto_top_up_during_dispute_uses_pre_dispute_required() {
     s.client.set_required_collateral(
         &s.oracle_admin,
         &s.importer,
-        &80_000_0000000,
+        &800_000_000_000,
         &None,
         &false,
         &false,
@@ -828,11 +829,11 @@ fn auto_top_up_during_dispute_uses_pre_dispute_required() {
     // auto_top_up should only move enough to reach pre_dispute (50k), not the new 80k.
     // shortfall to 50k = 20k; reserve=30k; moved=20k.
     let moved = s.client.auto_top_up(&s.importer);
-    assert_eq!(moved, 20_000_0000000);
+    assert_eq!(moved, 200_000_000_000);
 
     let acct = s.client.get_account(&s.importer);
-    assert_eq!(acct.collateral_balance, 50_000_0000000);
-    assert_eq!(acct.reserve_balance, 10_000_0000000);
+    assert_eq!(acct.collateral_balance, 500_000_000_000);
+    assert_eq!(acct.reserve_balance, 100_000_000_000);
 }
 
 // ── transfer_admin ─────────────────────────────────────────────────────────────
@@ -882,7 +883,7 @@ fn non_admin_cannot_transfer_admin() {
         invoke: &soroban_sdk::testutils::MockAuthInvoke {
             contract: &contract_id,
             fn_name: "transfer_admin",
-            args: soroban_sdk::vec![&env, intruder.clone().to_val()].into_val(&env),
+            args: soroban_sdk::vec![&env, intruder.clone().to_val()],
             sub_invokes: &[],
         },
     }]);

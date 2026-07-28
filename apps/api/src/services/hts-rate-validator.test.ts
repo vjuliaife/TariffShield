@@ -7,7 +7,7 @@
  * database connections are required.
  */
 
-import { describe, it, before, after, mock } from "node:test";
+import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 
 // ─── Mock the DB pool before the service module is loaded ─────────────────────
@@ -17,7 +17,7 @@ import assert from "node:assert/strict";
 // that replaces the named export before the test-subject is imported.
 
 // Minimal pool stub: cache miss by default (no rows returned).
-const poolStub = {
+const _poolStub = {
   query: async (_sql: string, _params?: unknown[]): Promise<{ rows: unknown[]; rowCount: number }> => ({
     rows: [],
     rowCount: 0,

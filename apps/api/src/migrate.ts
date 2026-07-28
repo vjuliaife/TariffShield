@@ -16,3 +16,4 @@ const { migrate, pool } = await import("./db.js");
 await migrate();
 await pool.end();
 console.log("Migrations complete.");
+export {};

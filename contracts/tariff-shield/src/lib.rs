@@ -423,13 +423,15 @@ impl TariffShieldContract {
         // Uses oracle_last_updated (not collateral_last_updated) so registration does
         // not count against the first oracle update.
         let cooldown_seconds: u64 = 86400;
-        if !bypass_rate_limit && !emergency && acct.oracle_last_updated > 0 {
-            if current_timestamp < acct.oracle_last_updated + cooldown_seconds {
-                let retry_after = acct.oracle_last_updated + cooldown_seconds;
-                env.events()
-                    .publish((symbol_short!("ratelimit"), importer.clone()), retry_after);
-                panic_with_error!(&env, Error::RateLimitExceededError);
-            }
+        if !bypass_rate_limit
+            && !emergency
+            && acct.oracle_last_updated > 0
+            && current_timestamp < acct.oracle_last_updated + cooldown_seconds
+        {
+            let retry_after = acct.oracle_last_updated + cooldown_seconds;
+            env.events()
+                .publish((symbol_short!("ratelimit"), importer.clone()), retry_after);
+            panic_with_error!(&env, Error::RateLimitExceededError);
         }
 
         let oracle_rate: i128 = if let Some(oracle_addr) = price_oracle_contract.clone() {
@@ -441,12 +443,12 @@ impl TariffShieldContract {
         };
 
         let adjusted_required = if oracle_rate != 10000 {
-            ((new_required as i128) * 10000) / oracle_rate
+            (new_required * 10000) / oracle_rate
         } else {
             new_required
         };
 
-        if oracle_rate < 9800 || oracle_rate > 10200 {
+        if !(9800..=10200).contains(&oracle_rate) {
             env.events()
                 .publish((symbol_short!("depeg"), importer.clone()), oracle_rate);
         }

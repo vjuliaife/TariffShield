@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { api, ApiError, stroopsToXlm } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 
 type Step = "amount" | "preview" | "confirm" | "receipt";
 

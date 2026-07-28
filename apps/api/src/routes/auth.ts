@@ -20,7 +20,7 @@ import { createHash, randomBytes } from "crypto";
 
 export const authRouter = Router();
 
-const ACCESS_TOKEN_EXPIRY = "15m";
+const _ACCESS_TOKEN_EXPIRY = "15m";
 const REFRESH_TOKEN_EXPIRY_DAYS = 30;
 
 function hashToken(raw: string): string {
@@ -228,7 +228,7 @@ authRouter.post("/refresh", async (req: Request, res: Response) => {
   const newRefreshHash = hashToken(newRefreshToken);
   const newExpiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
 
-  const newId = await rotateRefreshToken(existing.id, newRefreshHash, newExpiresAt);
+  await rotateRefreshToken(existing.id, newRefreshHash, newExpiresAt);
 
   const user = await pool.query<{ email: string; role: string }>(
     "SELECT email, role FROM users WHERE id = $1",
@@ -383,7 +383,8 @@ authRouter.post("/saml/:provider/callback", async (req: Request, res: Response) 
   );
 
   let userId: string;
-  let userRole: "surety_admin" = "surety_admin";
+  // eslint-disable-next-line @typescript-eslint/prefer-as-const
+  let userRole: "surety_admin" | "importer" = "surety_admin";
 
   if (existing.rowCount && existing.rowCount > 0) {
     userId = existing.rows[0]!.id;

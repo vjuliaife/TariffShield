@@ -11,7 +11,7 @@ export default function Home() {
             Customs bond collateral · Soroban smart contracts · Stellar testnet
           </p>
           <h1 className="mt-3 text-4xl sm:text-5xl font-semibold tracking-tight text-foreground">
-            Your bond collateral shouldn't earn 0%.
+            Your bond collateral shouldn&apos;t earn 0%.
           </h1>
           <p className="mt-5 text-lg text-muted leading-relaxed">
             US importers post <strong className="text-foreground">$3.6B</strong> in customs-bond insufficiencies (FY25). Surety premiums up <strong className="text-foreground">200%</strong> on tariff spikes.
@@ -40,7 +40,7 @@ export default function Home() {
             scoped roadmap item.
           </Card>
           <Card title="Surety clawback authority">
-            The surety partner retains emergency clawback (KYC-aware asset semantics). One contract call drains a defaulting importer's escrow
+            The surety partner retains emergency clawback (KYC-aware asset semantics). One contract call drains a defaulting importer&apos;s escrow
             to the surety wallet + freezes the account.
           </Card>
         </section>

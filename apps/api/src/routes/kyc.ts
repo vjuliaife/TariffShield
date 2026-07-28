@@ -32,8 +32,8 @@ function s3KeyDecrypt(encrypted: string): string {
 async function uploadDocumentToS3(
   importerId: string,
   documentType: string,
-  fileBuffer: Buffer,
-  mimeType: string,
+  _fileBuffer: Buffer,
+  _mimeType: string,
 ): Promise<string> {
   const timestamp = Date.now();
   const key = `kyc/${importerId}/${documentType}/${timestamp}`;

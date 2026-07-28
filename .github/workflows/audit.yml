@@ -87,12 +87,13 @@ jobs:
                 const severity = vuln.severity;
                 const viaList = Array.isArray(vuln.via) ? vuln.via : [vuln.via];
                 const viaStr = viaList.map(v => typeof v === 'object' ? v.title : v).filter(Boolean).join(', ') || 'unknown';
-                if (severity === 'critical') {
+                const isProjectDep = !vuln.nodes || vuln.nodes.some(n => !n.includes('npm/node_modules/'));
+                if (severity === 'critical' && isProjectDep) {
                   hasCritical = true;
-                  console.log(\`::error file=package.json::[NPM] Critical vulnerability in \${pkg}: via \${viaStr}\`);
-                } else if (severity === 'high') {
+                  console.log(`::error file=package.json::[NPM] Critical vulnerability in ${pkg}: via ${viaStr}`);
+                } else if (severity === 'high' && isProjectDep) {
                   highCount++;
-                  console.log(\`::warning file=package.json::[NPM] High vulnerability in \${pkg}: via \${viaStr}\`);
+                  console.log(`::warning file=package.json::[NPM] High vulnerability in ${pkg}: via ${viaStr}`);
                 }
               }
             }

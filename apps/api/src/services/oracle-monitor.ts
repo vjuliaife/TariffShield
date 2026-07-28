@@ -6,6 +6,7 @@ import { createRpcServer } from "../lib/soroban/rpcClient.js";
 const logger = pino({ name: "oracle-monitor" });
 
 let intervalId: NodeJS.Timeout | null = null;
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 let lastCursor: string | undefined = undefined;
 
 export async function startOracleMonitor() {

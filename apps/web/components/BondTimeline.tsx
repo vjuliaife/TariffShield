@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { type ContractEvent } from "@/lib/api";
 
-export function BondTimeline({ events }: { events: ContractEvent[] }) {
+export function BondTimeline({ events = [] }: { events?: ContractEvent[] }) {
   const [currentMonth, setCurrentMonth] = useState(new Date());
 
   const year = currentMonth.getFullYear();
@@ -32,7 +32,7 @@ export function BondTimeline({ events }: { events: ContractEvent[] }) {
 
   const weeks = [];
   let week: Date[] = [];
-  let d = new Date(startDate);
+  const d = new Date(startDate);
 
   while (d <= lastDay || week.length > 0) {
     week.push(new Date(d));

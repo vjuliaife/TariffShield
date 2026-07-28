@@ -5,7 +5,7 @@ import { z } from "zod";
 import { pool, getImporterMetrics, logAudit } from "../db.js";
 import { authMiddleware, privacyReacceptanceGate, tosReacceptanceGate, type AuthedRequest } from "../auth.js";
 import { requireLicenseVerified } from "./surety-license.js";
-import { contractClient, explorerTx, platformKeypair, suretyKeypair } from "../stellar.js";
+import { contractClient, explorerTx, platformKeypair } from "../stellar.js";
 import { lookupCbpDutyRate } from "../services/cbp-duty-lookup.js";
 import { validateHtsRates } from "../services/hts-rate-validator.js";
 import { screenImporterEntity, screenWalletAddress } from "../services/aml-screening.js";
@@ -659,8 +659,8 @@ importersRouter.post("/:id/verify-oracle-data", async (req: Request, res: Respon
   const csvHash = createHash("sha256").update(csvFingerprint).digest("hex");
 
   // Fetch on-chain value
-  const onChainStr = await getRequiredCollateralOnChain(importer.stellar_address as string);
-  const onChain = BigInt(onChainStr);
+  const acct = await contractClient.getAccount(importer.stellar_address as string);
+  const onChain = acct ? BigInt(acct.requiredCollateral) : 0n;
 
   const computedNum = Number(computed);
   const onChainNum = Number(onChain);
@@ -676,13 +676,13 @@ importersRouter.post("/:id/verify-oracle-data", async (req: Request, res: Respon
       `INSERT INTO oracle_alerts (importer_id, old_value, new_value, pct_change, tx_hash)
        VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT DO NOTHING`,
-      [importerId, onChainStr, computed.toString(), deviationPct.toFixed(2), "reconciliation_failure"],
+      [importerId, onChain.toString(), computed.toString(), deviationPct.toFixed(2), "reconciliation_failure"],
     );
   }
 
   res.json({
     computed: computed.toString(),
-    on_chain: onChainStr,
+    on_chain: onChain.toString(),
     match,
     deviation_pct: Math.round(deviationPct * 100) / 100,
     csv_hash: csvHash,

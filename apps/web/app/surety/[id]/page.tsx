@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Nav } from "@/components/Nav";
 import { api, ApiError, type ImporterDetail, type ContractEvent, stroopsToXlm } from "@/lib/api";
 import { getUser, isAuthenticated } from "@/lib/auth";
@@ -16,14 +16,7 @@ export default function SuretyImporterDetail() {
   const [busy, setBusy] = useState<string | null>(null);
   const [yieldXlm, setYieldXlm] = useState("1");
 
-  useEffect(() => {
-    if (!isAuthenticated()) { router.replace("/login"); return; }
-    const user = getUser();
-    if (user?.role !== "surety_admin") { router.replace("/app"); return; }
-    refresh();
-  }, [router, params?.id]);
-
-  async function refresh() {
+  const refresh = useCallback(async () => {
     if (!params?.id) return;
     try {
       const d = await api.getImporter(params.id);
@@ -35,7 +28,14 @@ export default function SuretyImporterDetail() {
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
     }
-  }
+  }, [params?.id]);
+
+  useEffect(() => {
+    if (!isAuthenticated()) { router.replace("/login"); return; }
+    const user = getUser();
+    if (user?.role !== "surety_admin") { router.replace("/app"); return; }
+    refresh();
+  }, [router, refresh]);
 
   async function act(name: string, fn: () => Promise<unknown>) {
     setBusy(name);

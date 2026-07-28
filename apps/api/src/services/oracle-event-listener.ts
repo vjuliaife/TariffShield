@@ -24,7 +24,7 @@
 
 import pino from "pino";
 import * as Sentry from "@sentry/node";
-import { rpc, scValToNative, xdr } from "@stellar/stellar-sdk";
+import { rpc, scValToNative } from "@stellar/stellar-sdk";
 import { pool } from "../db.js";
 import { env } from "../config/env.js";
 import { createRpcServer } from "../lib/soroban/rpcClient.js";
@@ -99,7 +99,7 @@ interface ParsedOracleEvent {
  * Attempt to extract oracle event data from a raw Soroban event.
  * Returns null when the event does not match either expected shape.
  */
-function parseOracleEvent(event: rpc.Api.EventRecord): ParsedOracleEvent | null {
+function parseOracleEvent(event: any): ParsedOracleEvent | null {
   try {
     // Topics are XDR-encoded ScVal strings in the API response.
     const topics = event.topic; // ScVal[]

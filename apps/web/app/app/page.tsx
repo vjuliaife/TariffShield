@@ -22,7 +22,7 @@ import { Nav } from "@/components/Nav";
 import { HealthScore } from "@/components/HealthScore";
 import { DepositWizard } from "@/components/DepositWizard";
 import { BondTimeline } from "@/components/BondTimeline";
-import { api, ApiError, type Importer, type ImporterDetail, stroopsToXlm } from "@/lib/api";
+import { api, ApiError, type ContractEvent, type Importer, type ImporterDetail, stroopsToXlm } from "@/lib/api";
 import { getUser, isAuthenticated } from "@/lib/auth";
 import { useYieldProjection } from "@/lib/workers/useYieldProjection";
 import * as Sentry from "@sentry/nextjs";
@@ -76,6 +76,21 @@ function ImporterDashboard() {
     refresh();
   }, [router, refresh]);
 
+  const onc = detail?.onChainAccount;
+
+  // Derived values recomputed only when the on-chain account snapshot changes,
+  // not on every render triggered by unrelated state (busy, error, etc.).
+  const { required, collateral, reserve, shortfall, excess, utilization } = useMemo(() => {
+    if (!onc) return { required: 0n, collateral: 0n, reserve: 0n, shortfall: 0n, excess: 0n, utilization: 0 };
+    const required = BigInt(onc.requiredCollateral);
+    const collateral = BigInt(onc.collateralBalance);
+    const reserve = BigInt(onc.reserveBalance);
+    const shortfall = required > collateral ? required - collateral : 0n;
+    const excess = collateral > required ? collateral - required : 0n;
+    const utilization = required === 0n ? 0 : Number((collateral * 100n) / required);
+    return { required, collateral, reserve, shortfall, excess, utilization };
+  }, [onc]);
+
   if (!importer) {
     return (
       <>
@@ -89,19 +104,7 @@ function ImporterDashboard() {
     return (<><Nav /><main className="max-w-4xl mx-auto px-6 py-10"><p className="text-muted">Loading…</p></main></>);
   }
 
-  const onc = detail.onChainAccount;
-
-  // Derived values recomputed only when the on-chain account snapshot changes,
-  // not on every render triggered by unrelated state (busy, error, etc.).
-  const { required, collateral, reserve, shortfall, excess, utilization } = useMemo(() => {
-    const required = BigInt(onc.requiredCollateral);
-    const collateral = BigInt(onc.collateralBalance);
-    const reserve = BigInt(onc.reserveBalance);
-    const shortfall = required > collateral ? required - collateral : 0n;
-    const excess = collateral > required ? collateral - required : 0n;
-    const utilization = required === 0n ? 0 : Number((collateral * 100n) / required);
-    return { required, collateral, reserve, shortfall, excess, utilization };
-  }, [onc.requiredCollateral, onc.collateralBalance, onc.reserveBalance]);
+  const account = detail.onChainAccount;
 
   return (
     <>
@@ -126,7 +129,7 @@ function ImporterDashboard() {
           ) : null}
         </div>
 
-        {onc.isClawbacked ? (
+        {account.isClawbacked ? (
           <div className="mt-6 rounded-lg border border-danger bg-danger/10 px-4 py-3 text-sm text-danger">
             <strong>Account frozen by surety.</strong> All collateral + reserve has been clawed back. No further deposits or withdrawals allowed.
           </div>
@@ -138,7 +141,7 @@ function ImporterDashboard() {
           </div>
           <div className="sm:col-span-3">
             <BalanceSummary
-              onChainAccount={onc}
+              onChainAccount={account}
               shortfall={shortfall}
               excess={excess}
               utilization={utilization}
@@ -146,9 +149,9 @@ function ImporterDashboard() {
           </div>
         </div>
 
-        <YieldProjectionPanel currentBalanceStroops={onc.collateralBalance} />
+        <YieldProjectionPanel currentBalanceStroops={account.collateralBalance} />
 
-        {!onc.isClawbacked && (
+        {!account.isClawbacked && (
           <div className="mt-6 grid gap-4 sm:grid-cols-3">
             <ActionCard title="Update tariff exposure"
                         description="Re-run required collateral from annual duty estimate. Demo computes required = annual_duty × 10% × 50%."
@@ -165,7 +168,7 @@ function ImporterDashboard() {
           </div>
         )}
 
-        {!onc.isClawbacked && (
+        {!account.isClawbacked && (
           <div className="mt-4 grid gap-4 sm:grid-cols-2">
             <button
               onClick={handleTopUp}

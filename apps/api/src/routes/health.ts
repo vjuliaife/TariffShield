@@ -12,7 +12,9 @@ let version = "unknown";
 try {
   const pkg = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8"));
   version = pkg.version || "unknown";
-} catch (e) {}
+} catch (_e) {
+  // ignore missing package.json
+}
 
 healthRouter.get("/", async (_req, res) => {
   const checks = {

@@ -8,7 +8,7 @@ import { env } from "../config/env.js";
 
 const ALGORITHM = "aes-256-gcm";
 const IV_BYTES = 12;
-const TAG_BYTES = 16;
+const _TAG_BYTES = 16;
 
 function getKey(version: number): Buffer {
   const raw = env.FIELD_ENCRYPTION_KEY ?? "";

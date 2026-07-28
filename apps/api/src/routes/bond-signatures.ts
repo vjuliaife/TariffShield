@@ -27,8 +27,8 @@ export const bondWebhookRouter = Router();
 async function createDocuSignEnvelope(
   bondId: string,
   importerEmail: string,
-  importerName: string,
-  suretyEmail: string,
+  _importerName: string,
+  _suretyEmail: string,
 ): Promise<{ envelopeId: string; signingUrl: string }> {
   if (env.DOCUSIGN_INTEGRATION_KEY) {
     // Production: POST /v2.1/accounts/{accountId}/envelopes via DocuSign SDK

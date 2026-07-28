@@ -336,6 +336,7 @@ ghcr.io/<owner>/tariffshield-api:<previous-sha>
 
 Or redeploy from the Render **Events** tab as described in the rollback section above.
 
+
 ## 10. Notifications
 
 `.github/workflows/deploy-api.yml` (production API deploy) and `.github/workflows/preview-deploy.yml` (Vercel PR previews) post to Slack on every deploy outcome, so the team doesn't have to manually check the Render or Vercel dashboards.

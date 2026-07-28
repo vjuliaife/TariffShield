@@ -8,7 +8,7 @@
  * Postgres or Soroban node is needed.
  */
 
-import { describe, it, before, beforeEach } from "node:test";
+import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 
 // ── In-memory DB stub ─────────────────────────────────────────────────────────
@@ -30,7 +30,7 @@ const feedStore = new Map<string, FeedRow>();
 let listenerStateStore: number | null = null;
 
 // Minimal pool stub that intercepts only the queries made by the listener.
-const poolStub = {
+const _poolStub = {
   async query(sql: string, params?: unknown[]): Promise<{ rows: unknown[]; rowCount: number }> {
     const s = sql.trim().replace(/\s+/g, " ");
 
@@ -102,7 +102,7 @@ const poolStub = {
 
 // ── Helpers to build mock Soroban event objects ────────────────────────────────
 
-import { nativeToScVal, Address, xdr } from "@stellar/stellar-sdk";
+import { nativeToScVal, Address } from "@stellar/stellar-sdk";
 
 function makeRequiredEvent(
   importerAddress: string,
@@ -128,7 +128,7 @@ function makeRequiredEvent(
   };
 }
 
-function makeEmergencyEvent(
+function _makeEmergencyEvent(
   importerAddress: string,
   oldRequired: bigint,
   newRequired: bigint,
