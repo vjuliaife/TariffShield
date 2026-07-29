@@ -15,6 +15,10 @@ permissions:
 jobs:
   rollback-drill:
     runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ github.workflow }}
+      cancel-in-progress: false # Concurrent runs could submit conflicting rollback transactions against the same testnet contract state
+    timeout-minutes: 15
     environment: testnet
 
     steps:
