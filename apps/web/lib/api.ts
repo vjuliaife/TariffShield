@@ -50,6 +50,7 @@ export interface ContractEvent {
 export interface ImporterDetail {
   importer: Importer;
   onChainAccount: OnChainAccount;
+  events?: ContractEvent[];
 }
 
 export interface EventsPage {

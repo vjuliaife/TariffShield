@@ -1,8 +1,8 @@
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
-import { pool, getStaleAccounts } from "../db.js";
+import { pool, logAudit, getStaleAccounts } from "../db.js";
 import { authMiddleware, requireRole, privacyReacceptanceGate, tosReacceptanceGate, type AuthedRequest } from "../auth.js";
-import { platformKeypair, oracleKeypair } from "../stellar.js";
+import { platformKeypair, oracleKeypair, contractClient } from "../stellar.js";
 import { bustHtsCache } from "../services/hts-rate-validator.js";
 
 export const adminRouter = Router();
@@ -403,3 +403,108 @@ adminRouter.get(
     res.end();
   },
 );
+
+// ── #247: POST /admin/auto-top-up ──────────────────────────────────────────
+
+const BatchAutoTopUpSchema = z.object({
+  importer_ids: z.array(z.string().uuid()).optional(),
+});
+
+/**
+ * POST /admin/auto-top-up
+ * Batch auto_top_up execution for all eligible under-collateralized importers (or filtered subset) in one operation.
+ * Concurrently submits Soroban transactions with a concurrency cap of 10 parallel requests.
+ * Uses Promise.allSettled pattern to report individual results without aborting on partial failures.
+ * Restricted to surety_admin role.
+ */
+adminRouter.post(
+  "/auto-top-up",
+  requireRole("surety_admin"),
+  async (req: Request, res: Response) => {
+    const user = (req as AuthedRequest).user;
+    const parse = BatchAutoTopUpSchema.safeParse(req.body ?? {});
+    if (!parse.success) {
+      res.status(400).json({ error: "invalid request body", details: parse.error.issues });
+      return;
+    }
+
+    const { importer_ids } = parse.data;
+
+    const eligible = await pool.query<{ id: string; stellar_address: string; legal_name: string }>(
+      `SELECT DISTINCT i.id, i.stellar_address, i.legal_name
+       FROM importers i
+       LEFT JOIN bond_records b ON b.importer_id = i.id
+       WHERE i.deleted_at IS NULL
+         AND i.collateral_balance < COALESCE(b.cbp_minimum_required, b.bond_amount, 0)
+         AND ($1::uuid[] IS NULL OR cardinality($1::uuid[]) = 0 OR i.id = ANY($1::uuid[]))`,
+      [importer_ids && importer_ids.length > 0 ? importer_ids : null],
+    );
+
+    const importersToTopUp = eligible.rows;
+
+    if (importersToTopUp.length === 0) {
+      res.json({ succeeded: 0, failed: 0, errors: [] });
+      return;
+    }
+
+    const CONCURRENCY_CAP = 10;
+    const results: Array<{ id: string; success: boolean; reason?: string }> = new Array(
+      importersToTopUp.length,
+    );
+    let index = 0;
+
+    const worker = async () => {
+      while (index < importersToTopUp.length) {
+        const currentIndex = index++;
+        const item = importersToTopUp[currentIndex]!;
+        try {
+          const onChain = await contractClient.autoTopUp(platformKeypair, item.stellar_address);
+          
+          await pool.query(
+            `INSERT INTO contract_events (importer_id, kind, amount, tx_hash, ledger_sequence, event_index)
+             VALUES ($1, 'auto_top_up', $2, $3, $4, $5)
+             ON CONFLICT (ledger_sequence, event_index) DO NOTHING`,
+            [
+              item.id,
+              onChain.result.toString(),
+              onChain.txHash,
+              onChain.ledgerSequence,
+              onChain.applicationOrder,
+            ],
+          );
+
+          results[currentIndex] = { id: item.id, success: true };
+        } catch (err: any) {
+          const reason = err?.message || String(err);
+          results[currentIndex] = { id: item.id, success: false, reason };
+        }
+      }
+    };
+
+    const limit = Math.min(CONCURRENCY_CAP, importersToTopUp.length);
+    const workers = Array.from({ length: limit }, () => worker());
+    await Promise.allSettled(workers);
+
+    let succeeded = 0;
+    let failed = 0;
+    const errors: Array<{ id: string; reason: string }> = [];
+
+    for (const r of results) {
+      if (r.success) {
+        succeeded++;
+      } else {
+        failed++;
+        errors.push({ id: r.id, reason: r.reason ?? "unknown error" });
+      }
+    }
+
+    await logAudit(user.id, "batch_auto_top_up", null, {
+      requestedCount: importersToTopUp.length,
+      succeeded,
+      failed,
+    });
+
+    res.json({ succeeded, failed, errors });
+  },
+);
+

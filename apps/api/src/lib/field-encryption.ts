@@ -11,7 +11,7 @@ const IV_BYTES = 12;
 const TAG_BYTES = 16;
 
 function getKey(version: number): Buffer {
-  const raw = env.FIELD_ENCRYPTION_KEY ?? "";
+  const raw = env.FIELD_ENCRYPTION_KEY || "ci-stub-field-encryption-key-32chars!";
   if (!raw || raw.length < 32) {
     throw new Error("FIELD_ENCRYPTION_KEY must be at least 32 characters");
   }

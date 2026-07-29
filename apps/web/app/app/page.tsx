@@ -399,7 +399,6 @@ function EventLog({
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- observer re-attach is driven by loadNextPage identity
   }, [loadNextPage, hasMore, loading, started]);
 
   return (

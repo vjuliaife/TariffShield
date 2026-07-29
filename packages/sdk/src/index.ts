@@ -156,6 +156,42 @@ export class TariffShieldClient {
     return this.invokeAndSubmit(signer, "auto_top_up", [addressToScVal(importer)]);
   }
 
+  /**
+   * Execute auto_top_up across multiple importers concurrently with a concurrency cap.
+   * Uses Promise.allSettled concurrency model so individual item failures do not abort the batch.
+   */
+  async batchAutoTopUp(
+    signer: Keypair,
+    importers: string[],
+    concurrencyLimit = 10,
+  ): Promise<Array<{ importer: string; result?: InvokeResult<bigint>; error?: Error }>> {
+    const results: Array<{ importer: string; result?: InvokeResult<bigint>; error?: Error }> = new Array(
+      importers.length,
+    );
+    let index = 0;
+
+    const worker = async () => {
+      while (index < importers.length) {
+        const i = index++;
+        const importer = importers[i]!;
+        try {
+          const res = await this.autoTopUp(signer, importer);
+          results[i] = { importer, result: res };
+        } catch (err: any) {
+          results[i] = {
+            importer,
+            error: err instanceof Error ? err : new Error(String(err)),
+          };
+        }
+      }
+    };
+
+    const limit = Math.max(1, Math.min(concurrencyLimit, importers.length));
+    const workers = Array.from({ length: limit }, () => worker());
+    await Promise.all(workers);
+    return results;
+  }
+
   async withdrawCollateral(
     signer: Keypair,
     importer: string,

@@ -32,7 +32,7 @@ export function BondTimeline({ events }: { events: ContractEvent[] }) {
 
   const weeks = [];
   let week: Date[] = [];
-  let d = new Date(startDate);
+  const d = new Date(startDate);
 
   while (d <= lastDay || week.length > 0) {
     week.push(new Date(d));

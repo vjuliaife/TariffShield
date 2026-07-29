@@ -18,7 +18,6 @@ deployments.json
 .vercel
 .vscode
 .idea
-Cargo.lock
 
 # Test snapshots
 __snapshots__/

@@ -697,5 +697,58 @@ export const openApiSpec = {
         },
       },
     },
+    "/admin/auto-top-up": {
+      post: {
+        tags: ["Compliance"],
+        summary: "Batch auto top-up for all eligible importers",
+        description: "Executes Soroban auto_top_up concurrently for under-collateralized importers with a concurrency limit of 10. Restricted to surety_admin role.",
+        requestBody: {
+          required: false,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  importer_ids: {
+                    type: "array",
+                    items: { type: "string", format: "uuid" },
+                    description: "Optional array of importer UUIDs to filter target set",
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: {
+            description: "Batch auto top-up execution summary",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["succeeded", "failed", "errors"],
+                  properties: {
+                    succeeded: { type: "integer" },
+                    failed: { type: "integer" },
+                    errors: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        required: ["id", "reason"],
+                        properties: {
+                          id: { type: "string", format: "uuid" },
+                          reason: { type: "string" },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          403: { description: "Surety admin role required" },
+        },
+      },
+    },
   },
 } as const;
