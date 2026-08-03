@@ -21,14 +21,14 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@next/bundle-analyzer": "^16.2.6",
-    "@playwright/test": "^1.49.0",
-    "@tailwindcss/postcss": "^4.1.10",
-    "@types/node": "^24.0.0",
+    "@next/bundle-analyzer": "^16.2.12",
+    "@playwright/test": "^1.62.1",
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/node": "^26.1.2",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "eslint": "^8.57.0",
-    "eslint-config-next": "^15.5.11",
+    "eslint": "^10.8.0",
+    "eslint-config-next": "^16.2.12",
     "postcss": "^8.4.49",
     "tailwindcss": "^4.1.10",
     "typescript": "^5.7.2"
