@@ -19,7 +19,7 @@ jobs:
     # Bounds a hung API/ZAP step so it can't ride the 360-minute runner ceiling.
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Node
         uses: actions/setup-node@v4
