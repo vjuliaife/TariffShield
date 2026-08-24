@@ -258,3 +258,7 @@ See [CHANGELOG.md](./CHANGELOG.md) for a full history of releases following the 
 ## License
 
 MIT. Contributions welcome — the roadmap section in [ARCHITECTURE.md](./ARCHITECTURE.md) lists scoped tasks with effort labels.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
