@@ -85,6 +85,40 @@ docker-compose up --build
 
 For hot-reload during development, `docker-compose.override.yml` mounts source directories automatically — no `--build` needed after editing TypeScript.
 
+### Which services are Dockerized vs host-only
+
+| Service | Dockerized? | Notes |
+|---|---|---|
+| Postgres | Yes | `docker-compose.yml`, port 5443 |
+| Redis | Yes | `docker-compose.yml`, port 6379 |
+| API (`apps/api`) | Yes, with hot reload | `docker-compose.override.yml` mounts `apps/api/src` and runs `tsx watch` |
+| Web (`apps/web`) | Yes, with hot reload | `docker-compose.override.yml` mounts `apps/web/src`, `app`, `components`, `lib` |
+| Jaeger tracing UI | Yes | `docker-compose.yml`, port 16686 |
+| Contract dev (`contracts/tariff-shield`) | **Optional** — host by default | See below |
+
+**Contract hot-reload (`npm run watch:contracts`) runs on the host by
+default, not inside `docker-compose up`.** It requires Rust and
+`cargo-watch` installed locally (`cargo install cargo-watch --version
+8.5.2`) even if you're otherwise running the full-stack Docker flow above —
+`docker-compose up` alone does not build or watch the contract, since
+Postgres/API/Web don't depend on it at runtime.
+
+If you'd rather not install Rust on the host, `docker-compose.override.yml`
+also ships an optional, opt-in `contracts` service that runs `cargo watch`
+inside a Rust container, mounting `contracts/` for hot reload the same way
+`api`/`web` do for TypeScript:
+
+```bash
+docker-compose --profile contracts up contracts
+```
+
+It's excluded from the default `docker-compose up` (via a Compose
+`profiles` gate) because most sessions working on `apps/api`/`apps/web`
+don't need it running, and the first `cargo watch -x test` inside a cold
+container has to fetch the crate registry, which is slow the first time.
+Production `docker-compose.yml` is unaffected either way — this service
+only exists in the local-dev override file.
+
 ## Quick start with Dev Containers
 
 The easiest way to get started is using GitHub Codespaces or the VS Code Dev Containers extension. The environment is pre-configured with Node.js, Rust, Docker, and the Soroban CLI.
@@ -235,6 +269,12 @@ npm run watch:contracts
 make watch-contracts
 ```
 The watch process is scoped to `src/` (`-w src/`) to avoid rebuild loops triggered by `target/` output.
+
+This is a host-only workflow, separate from the `docker-compose up` full-stack
+flow described above — see [Which services are Dockerized vs
+host-only](#which-services-are-dockerized-vs-host-only) for the fully-dockerized
+alternative (`docker-compose --profile contracts up contracts`) if you'd
+rather not install Rust locally.
 
 ### Pre-commit Hooks
 Pre-commit checks are managed with `husky` and `lint-staged`. On `git commit`:
