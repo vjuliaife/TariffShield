@@ -1,0 +1,1 @@
+Solution proposal for Login page offers no path forward for a user who cannot remember their password
