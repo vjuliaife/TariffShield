@@ -189,6 +189,17 @@ export function createTxSubmitWorker() {
         applicationOrder: onChain.applicationOrder,
       };
     },
-    { connection }
+    {
+      connection,
+      // BullMQ defaults Worker concurrency to 1, which serializes every
+      // queued deposit/withdraw/auto_top_up submission behind a single
+      // in-flight job even when the jobs touch unrelated importer
+      // accounts. That default was the dominant throughput bottleneck
+      // identified in the investigation for issue #1089; see
+      // docs/investigations/deposit-collateral-throughput.md for the
+      // ledger-level analysis of the (much smaller) ceiling that remains
+      // once this is raised.
+      concurrency: env.TX_SUBMIT_WORKER_CONCURRENCY,
+    }
   );
 }
