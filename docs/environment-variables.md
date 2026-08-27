@@ -18,6 +18,7 @@ Source of truth for these descriptions is the Zod schema in `apps/api/src/config
 | `NODE_ENV` | No (default: `development`) | Application environment. Accepted: `development`, `production`, `test` | `development` |
 | `DATABASE_URL` | **Yes** | PostgreSQL connection string. Append `?sslmode=require` for managed databases | `postgres://tariffshield:secret@localhost:5443/tariffshield` |
 | `REDIS_URL` | No (default: `redis://localhost:6379`) | Redis connection string, shared by the BullMQ job queue (`queue.ts`) and the on-chain account state cache (`cache.ts`, #246) — caches `GET /importers/:id` Soroban RPC reads under key `onchain:importer:<id>` with a 30s TTL | `redis://localhost:6379` |
+| `TX_SUBMIT_WORKER_CONCURRENCY` | No (default: `8`) | Number of `tx-submit` jobs (`queue.ts`) the worker (`worker.ts`) processes concurrently — see `docs/investigations/deposit-collateral-throughput.md` (#1089) for why 8 and not BullMQ's default of 1 | `8` |
 | `FRONTEND_ORIGIN` | No (default: `http://localhost:3000`) | CORS allowed origin for the web frontend | `http://localhost:3000` |
 
 ### Authentication
