@@ -1,4 +1,4 @@
-.PHONY: help dev test build contract-deploy db-migrate db-reset clean dep-graph watch-contracts
+.PHONY: help dev test build contract-deploy db-migrate db-reset clean dep-graph watch-contracts watch-contracts-docker
 
 help:
 	@echo "Available targets:"
@@ -6,6 +6,7 @@ help:
 	@echo "  test            - Run npm and cargo tests"
 	@echo "  build           - Build npm workspaces and cargo workspace"
 	@echo "  watch-contracts - Hot reload contract tests on file changes (cargo watch -x test)"
+	@echo "  watch-contracts-docker - Same, fully dockerized (issue #1142, no local Rust needed)"
 	@echo "  contract-deploy - Deploy the Soroban contract"
 	@echo "  db-migrate      - Run database migrations"
 	@echo "  db-reset        - Drop/recreate DB, run migrations, and seed data"
@@ -28,6 +29,9 @@ build:
 
 watch-contracts:
 	npm run watch:contracts
+
+watch-contracts-docker:
+	docker-compose --profile contracts up contracts
 
 contract-deploy:
 	soroban contract deploy \
