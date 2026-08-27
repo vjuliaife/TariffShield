@@ -31,6 +31,7 @@ import {
   stroopsToXlm,
 } from '@/lib/api';
 import { getUser, isAuthenticated } from '@/lib/auth';
+import { CopyButton } from '@/components/CopyButton';
 import { useYieldProjection } from '@/lib/workers/useYieldProjection';
 import * as Sentry from '@sentry/nextjs';
 
@@ -592,6 +593,7 @@ const EventLogRow = memo(function EventLogRow({ event }: { event: ContractEvent 
         <p className="text-xs text-muted">{new Date(event.createdAt).toLocaleString()}</p>
       </div>
       <span className="text-sm font-mono">{amountLabel}</span>
+      <CopyButton value={event.txHash} label="transaction hash" size="sm" />
       {event.txUrl ? (
         <a
           href={event.txUrl}
@@ -599,7 +601,7 @@ const EventLogRow = memo(function EventLogRow({ event }: { event: ContractEvent 
           rel="noopener noreferrer"
           className="text-xs text-accent hover:underline font-mono"
         >
-          {event.txHash.slice(0, 8)}…
+          View
         </a>
       ) : null}
     </li>
