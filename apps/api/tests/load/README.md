@@ -35,6 +35,21 @@ route is `POST /importers/:id/auto-top-up` (see
 `apps/api/src/routes/importers.ts`), and that's what `post-auto-top-up.js`
 targets.
 
+## Concurrent deposit_collateral investigation (#1089)
+
+`post-deposit-concurrency.js` is a separate script, not part of the
+`npm run benchmark` suite above. Instead of hitting one importer at constant
+load, it registers a fresh importer per virtual user and ramps concurrency
+from 1 to 100 VUs in stages, so it exercises `deposit_collateral` submitted
+concurrently across many distinct on-chain accounts — the scenario
+investigated in
+[`docs/investigations/deposit-collateral-throughput.md`](../../../../docs/investigations/deposit-collateral-throughput.md).
+Run it directly:
+
+```bash
+API_BASE_URL=http://localhost:3002 k6 run tests/load/post-deposit-concurrency.js
+```
+
 ## Running
 
 ```bash
