@@ -126,6 +126,8 @@ export default function SuretyImporterDetail() {
         {onc.isClawbacked ? (
           <div className="mt-6 rounded-lg border border-danger bg-danger/10 px-4 py-3 text-sm">
             <strong className="text-danger">Account frozen.</strong> Clawback already executed.
+            Contact the importer and review the on-chain event log below before taking further
+            admin action.
           </div>
         ) : null}
 

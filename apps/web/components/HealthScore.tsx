@@ -1,7 +1,27 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
+type HealthGrade = {
+  grade: 'excellent' | 'good' | 'fair' | 'poor';
+  gradeColor: string;
+};
+
+function getHealthGrade(healthScore: number): HealthGrade {
+  if (healthScore >= 80) {
+    return { grade: 'excellent', gradeColor: 'text-success bg-success/10' };
+  }
+
+  if (healthScore >= 60) {
+    return { grade: 'good', gradeColor: 'text-accent bg-accent/10' };
+  }
+
+  if (healthScore >= 40) {
+    return { grade: 'fair', gradeColor: 'text-yellow-500 bg-yellow-500/10' };
+  }
+
+  return { grade: 'poor', gradeColor: 'text-danger bg-danger/10' };
+}
 export function HealthScore({
   collateral,
   required,
@@ -21,22 +41,24 @@ export function HealthScore({
 
   const healthScore = Math.round(coverageScore * 0.7 + reserveScore * 0.3);
 
-  let grade: 'excellent' | 'good' | 'fair' | 'poor';
-  let gradeColor: string;
+  const { grade } = getHealthGrade(healthScore);
+  const [displayedScore, setDisplayedScore] = useState(healthScore);
+  const [displayedGrade, setDisplayedGrade] = useState(grade);
+  const [scoreVisible, setScoreVisible] = useState(true);
+  const { gradeColor: displayedGradeColor } = getHealthGrade(displayedScore);
 
-  if (healthScore >= 80) {
-    grade = 'excellent';
-    gradeColor = 'text-success bg-success/10';
-  } else if (healthScore >= 60) {
-    grade = 'good';
-    gradeColor = 'text-accent bg-accent/10';
-  } else if (healthScore >= 40) {
-    grade = 'fair';
-    gradeColor = 'text-yellow-500 bg-yellow-500/10';
-  } else {
-    grade = 'poor';
-    gradeColor = 'text-danger bg-danger/10';
-  }
+  useEffect(() => {
+    if (displayedScore === healthScore && displayedGrade === grade) return;
+
+    setScoreVisible(false);
+    const timer = window.setTimeout(() => {
+      setDisplayedScore(healthScore);
+      setDisplayedGrade(grade);
+      setScoreVisible(true);
+    }, 150);
+
+    return () => window.clearTimeout(timer);
+  }, [displayedGrade, displayedScore, grade, healthScore]);
 
   return (
     <div className="rounded-lg border border-border bg-card p-4">
@@ -86,9 +108,20 @@ export function HealthScore({
 
       <div className="mt-3 flex items-center justify-between">
         <div>
-          <p className="text-4xl font-bold">{healthScore}</p>
-          <p className={`mt-1 text-sm font-semibold px-2 py-1 rounded w-fit ${gradeColor}`}>
-            {grade.charAt(0).toUpperCase() + grade.slice(1)}
+          <p
+            aria-live="polite"
+            className={`min-w-[3ch] tabular-nums text-4xl font-bold transition-opacity duration-150 ease-out ${
+              scoreVisible ? 'opacity-100' : 'opacity-0'
+            }`}
+          >
+            {displayedScore}
+          </p>
+          <p
+            className={`mt-1 min-w-20 rounded px-2 py-1 text-center text-sm font-semibold transition-opacity duration-150 ease-out ${displayedGradeColor} ${
+              scoreVisible ? 'opacity-100' : 'opacity-0'
+            }`}
+          >
+            {displayedGrade.charAt(0).toUpperCase() + displayedGrade.slice(1)}
           </p>
         </div>
         <div className="text-right text-xs text-muted space-y-0.5">

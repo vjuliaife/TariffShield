@@ -182,7 +182,8 @@ function ImporterDashboard() {
         {onc.isClawbacked ? (
           <div className="mt-6 rounded-lg border border-danger bg-danger/10 px-4 py-3 text-sm text-danger">
             <strong>Account frozen by surety.</strong> All collateral + reserve has been clawed
-            back. No further deposits or withdrawals allowed.
+            back. No further deposits or withdrawals allowed. Contact your surety support team
+            and review the on-chain event log below before taking another action.
           </div>
         ) : null}
 
