@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { Nav } from '@/components/Nav';
 import { api, ApiError, type Importer, type ImporterMetrics, stroopsToXlm } from '@/lib/api';
+import { ImporterComparisonTable, type ImporterRow } from '@/components/ImporterComparisonTable';
 import { getUser, isAuthenticated } from '@/lib/auth';
 
 export default function SuretyDashboard() {
@@ -82,26 +83,22 @@ export default function SuretyDashboard() {
               </p>
             </div>
           ) : (
-            <ul className="divide-y divide-border rounded-lg border border-border bg-card">
-              {importers.map((imp) => (
-                <li key={imp.id}>
-                  <Link
-                    href={`/surety/${imp.id}`}
-                    onMouseEnter={() => api.prefetchImporter(imp.id)}
-                    className="flex items-center justify-between gap-4 px-4 py-3 hover:bg-background"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <p className="font-medium">{imp.legalName}</p>
-                      <p className="text-xs text-muted">
-                        Bond <span className="font-mono">{imp.bondId}</span> · {imp.email}
-                      </p>
-                      <p className="text-xs text-muted font-mono break-all">{imp.stellarAddress}</p>
-                    </div>
-                    <span className="text-xs text-accent">manage →</span>
-                  </Link>
-                </li>
-              ))}
-            </ul>
+            <ImporterComparisonTable
+              importers={importers.map((imp) => ({
+                id: imp.id,
+                legalName: imp.legalName,
+                ein: imp.ein,
+                bondId: imp.bondId,
+                requiredCollateral: '0',
+                postedCollateral: '0',
+                utilization: 0,
+                reserve: '0',
+                yieldAccrued: '0',
+                healthScore: 100,
+                lastActivity: imp.createdAt,
+                stellarAddress: imp.stellarAddress,
+              } as ImporterRow))}
+            />
           )}
         </div>
       </main>

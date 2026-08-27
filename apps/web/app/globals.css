@@ -43,3 +43,44 @@ body {
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
 }
+
+/* MobileNavDrawer animations */
+@keyframes drawer-slide-in {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes drawer-slide-out {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-100%);
+  }
+}
+
+@keyframes backdrop-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.drawer-enter {
+  animation: drawer-slide-in 200ms ease-out forwards;
+}
+
+.drawer-exit {
+  animation: drawer-slide-out 200ms ease-in forwards;
+}
+
+.drawer-backdrop {
+  animation: backdrop-fade-in 200ms ease-out forwards;
+  background: rgba(0, 0, 0, 0.5);
+}

@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Nav } from '@/components/Nav';
 import { api, ApiError, type ImporterDetail, type ContractEvent, stroopsToXlm } from '@/lib/api';
 import { getUser, isAuthenticated } from '@/lib/auth';
+import { CopyButton } from '@/components/CopyButton';
 
 export default function SuretyImporterDetail() {
   const params = useParams<{ id: string }>();
@@ -82,9 +83,16 @@ export default function SuretyImporterDetail() {
           <p className="mt-1 text-sm text-muted">
             Bond <span className="font-mono">{detail.importer.bondId}</span>
           </p>
-          <p className="mt-1 text-xs font-mono break-all text-muted">
-            {detail.importer.stellarAddress}
-          </p>
+          <div className="mt-1 flex items-center gap-2">
+            <p className="text-xs font-mono break-all text-muted">
+              {detail.importer.stellarAddress}
+            </p>
+            <CopyButton value={detail.importer.stellarAddress} label="stellar address" size="sm" />
+          </div>
+          <div className="mt-2 flex items-center gap-2">
+            <span className="text-xs text-muted">Importer ID:</span>
+            <CopyButton value={detail.importer.id} label="importer ID" size="sm" />
+          </div>
         </div>
 
         {onc.isClawbacked ? (
@@ -190,6 +198,7 @@ export default function SuretyImporterDetail() {
                   <span className="text-sm font-mono">
                     {e.amount ? `${stroopsToXlm(e.amount)} XLM` : '—'}
                   </span>
+                  <CopyButton value={e.txHash} label="transaction hash" size="sm" />
                   {e.txUrl ? (
                     <a
                       href={e.txUrl}
@@ -197,7 +206,7 @@ export default function SuretyImporterDetail() {
                       rel="noopener noreferrer"
                       className="text-xs text-accent hover:underline font-mono"
                     >
-                      {e.txHash.slice(0, 8)}…
+                      View
                     </a>
                   ) : null}
                 </li>
