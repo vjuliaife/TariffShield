@@ -15,3 +15,35 @@ services:
       - ./apps/web/lib:/app/lib:delegated
     environment:
       NODE_ENV: development
+
+  # Optional, fully-dockerized equivalent of `npm run watch:contracts`
+  # (issue #1142). Off by default — `docker-compose up` alone does not
+  # start it, since most iterations on api/web don't need it running and
+  # `cargo watch` inside a cold container needs to fetch the crate registry
+  # on first run. Opt in explicitly:
+  #
+  #   docker-compose --profile contracts up contracts
+  #
+  # See "Local Development (Full-stack Docker)" in README.md for the
+  # Dockerized-vs-host-only breakdown of every service.
+  contracts:
+    image: rust:1.94-bookworm
+    container_name: tariffshield-contracts
+    profiles: ["contracts"]
+    working_dir: /workspace
+    volumes:
+      - ./contracts:/workspace/contracts:delegated
+      - ./Cargo.toml:/workspace/Cargo.toml:delegated
+      - ./Cargo.lock:/workspace/Cargo.lock:delegated
+      - tariffshield_cargo_registry:/usr/local/cargo/registry
+      - tariffshield_contracts_target:/workspace/target
+    command: >
+      bash -c "rustup target add wasm32-unknown-unknown &&
+               cargo install cargo-watch --version 8.5.2 --locked &&
+               cd contracts/tariff-shield && cargo watch -x test -w src/"
+    networks:
+      - tariffshield-net
+
+volumes:
+  tariffshield_cargo_registry:
+  tariffshield_contracts_target:
