@@ -76,6 +76,35 @@ export interface BondAnnotation {
   updatedAt: string;
 }
 
+// ── Developer usage dashboard (#1043) ──────────────────────────────────────
+export interface UsageBucket {
+  windowStart: string;
+  requestCount: number;
+}
+
+export interface ApiKeyUsageSummary {
+  apiKeyId: string | null;
+  rateLimitPerMin: number | null;
+  currentMinuteCount: number;
+  remaining: number | null;
+  approachingLimit: boolean;
+  last24hByHour: UsageBucket[];
+  last30dByDay: UsageBucket[];
+  last24hByCategory: { category: string; requestCount: number }[];
+}
+
+export interface DeveloperKey {
+  id: string;
+  prefix: string;
+  label: string | null;
+  scopes: string[];
+  rate_limit_per_min: number | null;
+  last_used_at: string | null;
+  expires_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+}
+
 async function request<T>(
   path: string,
   options: { method?: string; body?: unknown; auth?: boolean } = {}
@@ -191,6 +220,25 @@ export const api = {
     }),
   deleteAnnotation: (id: string) =>
     request<{ success: boolean }>(`/bond-annotations/${id}`, { method: 'DELETE' }),
+
+  // ── Developer usage dashboard (#1043) ────────────────────────────────────
+  developerKeys: () => request<{ keys: DeveloperKey[] }>('/developer/keys'),
+  developerUsage: () =>
+    request<{ usage: ApiKeyUsageSummary; keyCount: number }>('/developer/usage'),
+  developerKeyUsage: (id: string) =>
+    request<{ usage: ApiKeyUsageSummary }>(`/developer/keys/${id}/usage`),
+
+  // ── Onboarding drip (#1044) ──────────────────────────────────────────────
+  onboardingDrip: () =>
+    request<{
+      enrolled: boolean;
+      enrolledAt?: string;
+      completedAt?: string | null;
+      unsubscribedAt?: string | null;
+      sends: { step_key: string; status: string; sent_at: string; subject: string | null }[];
+    }>('/onboarding/drip'),
+  onboardingDripUnsubscribe: () =>
+    request<{ success: boolean }>('/onboarding/drip/unsubscribe', { method: 'POST' }),
 };
 
 export function stroopsToXlm(stroops: string | bigint | number): string {

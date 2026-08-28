@@ -24,10 +24,15 @@ export function DepositWizard({
   const [txHash, setTxHash] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  function handleCancel() {
+  function resetWizard() {
     setStep('amount');
     setXlm('50');
     setTxHash(null);
+    setBusy(false);
+  }
+
+  function handleCancel() {
+    resetWizard();
     onCancel?.();
   }
 
@@ -135,6 +140,23 @@ export function DepositWizard({
             {txHash && (
               <p className="mt-2 text-xs font-mono break-all text-accent">{txHash.slice(0, 16)}…</p>
             )}
+          </div>
+          {/* #1049 — the receipt is no longer a dead end: the user can start
+              another deposit (state reset to the amount step, clearing the
+              previous txHash) or dismiss the wizard entirely. */}
+          <div className="flex gap-2">
+            <button
+              onClick={resetWizard}
+              className="flex-1 rounded-md bg-accent text-accent-foreground px-3 py-1.5 text-sm hover:opacity-90"
+            >
+              Make another deposit
+            </button>
+            <button
+              onClick={handleCancel}
+              className="flex-1 rounded-md border border-border px-3 py-1.5 text-sm hover:bg-card"
+            >
+              Done
+            </button>
           </div>
         </>
       )}
