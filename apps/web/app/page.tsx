@@ -40,6 +40,10 @@ export default function Home() {
               Log in
             </Link>
           </div>
+          <p className="mt-3 text-xs text-muted">
+            Takes under a minute — pick importer or surety admin, add an email + password. No CBP
+            credentials or real funds needed on testnet.
+          </p>
         </section>
 
         <section className="mt-16 grid gap-6 sm:grid-cols-3">
@@ -61,38 +65,38 @@ export default function Home() {
 
         <section className="mt-16 rounded-lg border border-border bg-card p-6">
           <h2 className="text-lg font-semibold">How a tariff spike plays out</h2>
-          <ol className="mt-3 space-y-2 text-sm list-decimal pl-5">
-            <li>
+          <ol className="mt-6 space-y-6">
+            <Step number={1}>
               You sign up as an importer + register your CBP bond ID. Platform funds a Stellar
               account for you on testnet via friendbot.
-            </li>
-            <li>
+            </Step>
+            <Step number={2}>
               You upload your ACE Portal CSV (or synthetic data at MVP). The platform computes
               required collateral from annual duties × 10% × 50%.
-            </li>
-            <li>
+            </Step>
+            <Step number={3}>
               You deposit USDC into your <em>collateral</em> bucket + a margin into your{' '}
               <em>reserve</em> bucket. Both held by the Soroban contract.
-            </li>
-            <li>
+            </Step>
+            <Step number={4}>
               Tariff schedule changes (Section 301 hike, reciprocal regime, AD/CVD order). Your
               required collateral updates on-chain.
-            </li>
-            <li>
+            </Step>
+            <Step number={5}>
               One contract call (<code className="text-accent">auto_top_up</code>) moves the
               shortfall from reserve to collateral atomically. No paperwork. No re-underwriting. No
               port hold.
-            </li>
-            <li>
+            </Step>
+            <Step number={6}>
               BENJI yield accrues to your account every period. Withdrawals (above required) are one
               contract call.
-            </li>
-            <li>
+            </Step>
+            <Step number={7} last>
               If you default, surety calls <code className="text-accent">clawback</code> — all funds
               move to surety wallet, account freezes. Bond stays good.
-            </li>
+            </Step>
           </ol>
-          <p className="mt-3 text-xs text-muted">
+          <p className="mt-6 text-xs text-muted">
             MVP runs on Stellar testnet with synthetic CBP data. Live ACE API + surety partner
             integration + real BENJI flow + mainnet config are scoped roadmap items.
           </p>
@@ -112,5 +116,30 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
       <h3 className="text-sm font-semibold tracking-tight text-foreground">{title}</h3>
       <p className="mt-2 text-sm text-muted leading-relaxed">{children}</p>
     </div>
+  );
+}
+
+function Step({
+  number,
+  last = false,
+  children,
+}: {
+  number: number;
+  last?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <li className="relative flex gap-4 pl-1">
+      {!last && (
+        <span
+          aria-hidden="true"
+          className="absolute left-[19px] top-9 bottom-[-24px] w-px bg-border"
+        />
+      )}
+      <span className="relative z-10 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-accent/40 bg-accent/10 text-sm font-semibold text-accent">
+        {number}
+      </span>
+      <p className="mt-1.5 text-sm text-muted leading-relaxed">{children}</p>
+    </li>
   );
 }
