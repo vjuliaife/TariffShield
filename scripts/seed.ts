@@ -5,12 +5,18 @@
  *
  * Creates:
  *   - 1 surety_admin user
- *   - 2 demo importer accounts
+ *   - 2 demo importer accounts (+ a 3rd shortfall-scenario importer with --shortfall)
  *   - Sample contract events linked to demo importers
  *   - Representative tariff entries (via tariff_uploads)
  *
  * Usage:
- *   npm run seed
+ *   npm run seed                # base demo importers
+ *   npm run seed -- --shortfall # also seeds demo-importer-shortfall@example.com,
+ *                               # already in the shortfall state described in the
+ *                               # README "Verification flow" (30 XLM collateral +
+ *                               # 100 XLM reserve deposited, tariff upload driving
+ *                               # required collateral to 80 XLM, so auto_top_up
+ *                               # deterministically moves 50 XLM reserve → collateral)
  *
  * Environment (from apps/api/.env.example):
  *   SEED_ADMIN_PASSWORD=Admin#123
@@ -31,6 +37,28 @@ const SEED_IMPORTERS = [
   { email: "demo-importer-1@example.com", password: process.env.SEED_IMPORTER_PASSWORD ?? "Importer#123", legalName: "Demo Importer One LLC", ein: "12-3456789", bondId: 1_000_000_000_000_001n },
   { email: "demo-importer-2@example.com", password: process.env.SEED_IMPORTER_PASSWORD ?? "Importer#123", legalName: "Demo Importer Two Corp", ein: "98-7654321", bondId: 1_000_000_000_000_002n },
 ];
+
+// #1140 — `--shortfall`: a third importer that is already in the shortfall
+// scenario the README "Verification flow" documents. Amounts are in stroops
+// (7 decimals: 30 XLM = 300_000_000, 100 XLM = 1_000_000_000).
+// required_collateral = annual_duty * 0.10 * 0.50 (see
+// archives' POST /importers/:id/upload-tariff-csv), so an annual duty of
+// 1600 XLM (16_000_000_000 stroops) produces 80 XLM (800_000_000 stroops)
+// required — after the documented 30 XLM collateral deposit that leaves a
+// 50 XLM shortfall that auto_top_up moves from the 100 XLM reserve.
+const SHORTFALL = process.argv.includes("--shortfall");
+const SEED_SHORTFALL_IMPORTER = {
+  email: "demo-importer-shortfall@example.com",
+  password: process.env.SEED_IMPORTER_PASSWORD ?? "Importer#123",
+  legalName: "Demo Importer Shortfall LLC",
+  ein: "55-6712390",
+  bondId: 1_000_000_000_000_003n,
+};
+const SHORTFALL_DEPOSIT_COLLATERAL = 300_000_000; // 30 XLM — README step 3
+const SHORTFALL_DEPOSIT_RESERVE = 1_000_000_000;  // 100 XLM — README step 3
+const SHORTFALL_ANNUAL_DUTY = 16_000_000_000;     // 1600 XLM → README step 4
+const SHORTFALL_REQUIRED = 800_000_000;           // 80 XLM (annual_duty × 10% × 50%)
+const SHORTFALL_EXPECTED_MOVE = 500_000_000;      // 50 XLM = required − collateral
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 async function hashPassword(password: string): Promise<string> {
@@ -128,6 +156,37 @@ async function main(): Promise<void> {
     await insertTariffUpload(entry.importerId, entry.filename, entry.annualDuty, entry.collateral);
   }
 
+  // ── #1140: shortfall scenario (--shortfall) ────────────────────────────────
+  let shortfallImporterResult:
+    | { email: string; password: string; userId: string; importerId: string }
+    | undefined;
+
+  if (SHORTFALL) {
+    const imp = SEED_SHORTFALL_IMPORTER;
+    const hash = await hashPassword(imp.password);
+    const userId = await upsertUser(imp.email, hash, "importer");
+    const importerId = await upsertImporter(userId, imp.legalName, imp.ein, imp.bondId);
+    shortfallImporterResult = { email: imp.email, password: imp.password, userId, importerId };
+
+    // README "Verification flow" state: deposits + tariff upload already
+    // applied, so required_collateral (80 XLM) exceeds collateral (30 XLM).
+    for (const evt of [
+      { kind: "register", amount: 0 },
+      { kind: "deposit_collateral", amount: SHORTFALL_DEPOSIT_COLLATERAL },
+      { kind: "deposit_reserve", amount: SHORTFALL_DEPOSIT_RESERVE },
+      { kind: "required_changed", amount: SHORTFALL_REQUIRED },
+    ]) {
+      await insertContractEvent(importerId, evt.kind, evt.amount, `0x${randomUUID().replace(/-/g, "")}`);
+    }
+
+    await insertTariffUpload(
+      importerId,
+      "hs_8541_semiconductors.csv",
+      SHORTFALL_ANNUAL_DUTY,
+      SHORTFALL_REQUIRED
+    );
+  }
+
   // Summary
   console.log("\n✅ Seed complete — created resources:\n");
   printTable(
@@ -137,6 +196,17 @@ async function main(): Promise<void> {
     ],
     ["type", "email", "password", "id"]
   );
+
+  if (SHORTFALL && shortfallImporterResult) {
+    console.log(
+      `\n🔻 Shortfall demo importer seeded (${shortfallImporterResult.email}).\n` +
+        `   Required collateral: ${Number(SHORTFALL_REQUIRED) / 1e7} XLM (annual duty 1600 XLM × 10% × 50%)\n` +
+        `   Deposited: ${Number(SHORTFALL_DEPOSIT_COLLATERAL) / 1e7} XLM collateral + ${Number(SHORTFALL_DEPOSIT_RESERVE) / 1e7} XLM reserve\n` +
+        `   Expected auto_top_up: ${Number(SHORTFALL_EXPECTED_MOVE) / 1e7} XLM moved reserve → collateral (matches README)\n` +
+        `   Exercise it with:\n` +
+        `     npm run admin -- auto-top-up --importer-id ${shortfallImporterResult.importerId}\n`
+    );
+  }
 
   console.log("\n💡 Tip: copy these credentials into your API client to log in.\n");
   process.exit(0);

@@ -73,8 +73,13 @@ ZodError: [
 cp apps/api/.env.example apps/api/.env
 
 # For the web app
-cp apps/web/.env.example apps/web/.env
+cp apps/web/.env.example apps/web/.env.local
 ```
+
+Next.js auto-loads `.env.local` for local development (it takes precedence over
+a plain `.env`), and onboarding paths such as `make setup-env` and
+`scripts/setup-env.ts` write to `apps/web/.env.local` — keep web-only overrides
+there so they are never committed.
 
 Then fill in the required secrets. At minimum you need `JWT_SECRET` (any 64-hex-char string) and `PLATFORM_STELLAR_SECRET` / `SURETY_STELLAR_SECRET` (generate with `stellar keys generate`). All required variables are documented in `apps/api/.env.example`.
 
@@ -260,25 +265,25 @@ The Makefile `make setup-env` funds the platform and surety keypairs automatical
 
 ## 8. `NEXT_PUBLIC_*` vars not visible in the browser
 
-**Q:** Environment variables prefixed `NEXT_PUBLIC_` are `undefined` at runtime in the browser, even though they are set in `apps/web/.env`.
+**Q:** Environment variables prefixed `NEXT_PUBLIC_` are `undefined` at runtime in the browser, even though they are set in `apps/web/.env.local`.
 
 ```js
 // In browser console:
 console.log(process.env.NEXT_PUBLIC_API_URL) // undefined
 ```
 
-**Cause:** Next.js inlines `NEXT_PUBLIC_*` variables at **build time**, not at runtime. If the `.env` file is added or changed after `next build`, the old baked-in values (or `undefined`) are still in the bundle.
+**Cause:** Next.js inlines `NEXT_PUBLIC_*` variables at **build time**, not at runtime. If the `.env.local` file is added or changed after `next build`, the old baked-in values (or `undefined`) are still in the bundle.
 
 **Fix:**
 
 ```bash
-# After changing apps/web/.env, rebuild the web app
+# After changing apps/web/.env.local, rebuild the web app
 cd apps/web
 npm run build   # re-inlines env vars into the JS bundle
 npm run start   # or: npm run dev (dev server re-reads on restart)
 ```
 
-In development (`npm run dev`), the dev server watches `.env` changes but requires a **restart** — not just a hot-reload — to pick up new `NEXT_PUBLIC_*` values.
+In development (`npm run dev`), the dev server watches `.env.local` changes but requires a **restart** — not just a hot-reload — to pick up new `NEXT_PUBLIC_*` values.
 
 The canonical variables are documented in `apps/web/.env.example`:
 ```

@@ -16,6 +16,11 @@ const { Keypair } = await import("@stellar/stellar-sdk");
 
 const program = new Command();
 
+// #1140 — 7-decimal XLM display helper for the auto-top-up dry-run output.
+function xlm(stroops: bigint | string | number): string {
+  return `${(Number(BigInt(stroops)) / 1e7).toFixed(2)} XLM`;
+}
+
 program
   .name("admin")
   .description("CLI to manage TariffShield platform operations")
@@ -113,6 +118,116 @@ program
       console.log(`Tx Hash: ${onChain.txHash}`);
     } catch (e) {
       console.error("Error setting required collateral:", e);
+    } finally {
+      await pool.end();
+    }
+  });
+
+program
+  .command("auto-top-up")
+  .description(
+    "Compute (dry-run), and with --execute submit, the auto_top_up shortfall move for an importer (#1140)"
+  )
+  .requiredOption("--importer-id <id>", "Importer UUID")
+  .option("--execute", "Submit the real on-chain auto_top_up transaction")
+  .action(async (options) => {
+    try {
+      const importerResult = await pool.query("SELECT * FROM importers WHERE id = $1", [options.importerId]);
+      if (importerResult.rowCount === 0) {
+        throw new Error("Importer not found");
+      }
+      const importer = importerResult.rows[0];
+
+      // Required collateral: latest tariff upload (the upload route stores the
+      // on-chain required_stroops), falling back to the latest required_changed event.
+      const uploads = await pool.query(
+        `SELECT computed_required_collateral::text AS req
+         FROM tariff_uploads WHERE importer_id = $1 ORDER BY created_at DESC LIMIT 1`,
+        [importer.id]
+      );
+      let dbRequired: bigint | null =
+        uploads.rowCount && uploads.rowCount > 0 ? BigInt(uploads.rows[0].req) : null;
+      if (dbRequired === null) {
+        const reqEvents = await pool.query(
+          `SELECT amount::text AS req FROM contract_events
+           WHERE importer_id = $1 AND kind = 'required_changed' ORDER BY created_at DESC LIMIT 1`,
+          [importer.id]
+        );
+        if (reqEvents.rowCount && reqEvents.rowCount > 0) {
+          dbRequired = BigInt(reqEvents.rows[0].req);
+        }
+      }
+
+      // Deposit/withdraw/top-up history from contract_events (stroops).
+      const events = await pool.query(
+        `SELECT kind, COALESCE(SUM(amount), 0)::text AS total
+         FROM contract_events
+         WHERE importer_id = $1 AND kind IN ('deposit_collateral','deposit_reserve','withdraw','auto_top_up')
+         GROUP BY kind`,
+        [importer.id]
+      );
+      const totals = new Map<string, bigint>();
+      for (const row of events.rows) {
+        totals.set(row.kind, BigInt(row.total));
+      }
+      const sumOf = (...kinds: string[]): bigint =>
+        kinds.reduce((acc, k) => acc + (totals.get(k) ?? 0n), 0n);
+
+      // Prefer live on-chain state when the importer is actually registered
+      // (seeded demo importers use placeholder addresses, so fall back to the
+      // ledger-event picture and label the result as a dry-run).
+      let onChain: Awaited<ReturnType<typeof contractClient.getAccount>> | null = null;
+      try {
+        onChain = await contractClient.getAccount(importer.stellar_address);
+      } catch {
+        onChain = null;
+      }
+
+      const required = onChain ? onChain.requiredCollateral : (dbRequired ?? 0n);
+      const collateral = onChain
+        ? onChain.collateralBalance
+        : sumOf("deposit_collateral") - sumOf("withdraw");
+      const reserve = sumOf("deposit_reserve") - sumOf("auto_top_up");
+
+      const shortfall = required > collateral ? required - collateral : 0n;
+      const moved = shortfall > 0n && reserve > 0n ? (shortfall < reserve ? shortfall : reserve) : 0n;
+      const source = onChain ? "on-chain account" : "DB ledger events (dry-run)";
+
+      console.log(`\🔺 auto_top_up for ${importer.legal_name} (${importer.id})`);
+      console.log(`   Source: ${source}`);
+      console.log(`   Required collateral: ${xlm(required)}`);
+      console.log(`   Collateral balance:  ${xlm(collateral)}`);
+      console.log(`   Reserve balance:     ${xlm(reserve)}`);
+      if (shortfall === 0n) {
+        console.log(`   Shortfall: none — collateral already meets required. Nothing to move.`);
+      } else {
+        console.log(`   Shortfall: ${xlm(shortfall)}`);
+        console.log(`   Would move: ${xlm(moved)} reserve → collateral`);
+      }
+
+      if (options.execute) {
+        if (!onChain) {
+          throw new Error(
+            `Importer ${importer.id} is not reachable on-chain (${importer.stellar_address}). ` +
+              `Seeded demo addresses are placeholders — register/fund a real on-chain importer first.`
+          );
+        }
+        if (moved === 0n) {
+          console.log(`   Nothing to execute — no positive shortfall.`);
+          return;
+        }
+        const result = await contractClient.autoTopUp(platformKeypair, importer.stellar_address);
+        await pool.query(
+          `INSERT INTO contract_events (importer_id, kind, amount, tx_hash)
+           VALUES ($1, 'auto_top_up', $2, $3) ON CONFLICT DO NOTHING`,
+          [importer.id, result.result.toString(), result.txHash]
+        );
+        console.log(`   ✅ Executed on-chain: moved ${xlm(result.result)} (tx ${result.txHash})`);
+      } else {
+        console.log(`   Dry-run only — re-run with --execute to submit the transaction.`);
+      }
+    } catch (e) {
+      console.error("Error in auto-top-up:", e);
     } finally {
       await pool.end();
     }
