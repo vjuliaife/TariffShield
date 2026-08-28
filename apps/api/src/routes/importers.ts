@@ -717,8 +717,20 @@ importersRouter.post('/:id/upload-tariff-csv', async (req: Request, res: Respons
     // serving a stale cache entry for up to 30s.
     await invalidateOnChainAccount(importer.id);
 
-    // Refresh the importer_metrics materialized view
-    await refreshImporterMetricsView();
+    // #1091: refresh cost scales with total importer/bond/event volume system-wide
+    // (the view aggregates across ALL importers), not just this one upload, so as
+    // that volume grows this REFRESH gets slower and is more likely to time out or
+    // error under load. Isolated in its own try/catch, matching the alert-evaluation
+    // pattern just above — the tariff upload and on-chain collateral update have
+    // already succeeded by this point, so a slow/failed metrics refresh must not
+    // turn into a 500 for an otherwise-successful request. The periodic refresh job
+    // (see refreshImporterMetricsView's doc comment) remains as a backstop if this
+    // on-demand refresh fails.
+    try {
+      await refreshImporterMetricsView();
+    } catch (err) {
+      console.error('[importers] importer_metrics refresh failed:', err);
+    }
 
     res.json({
       annualDutyTotal,
