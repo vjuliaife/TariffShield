@@ -24,6 +24,8 @@ import {
   type AuthedRequest,
 } from '../auth.js';
 import { env } from '../config/env.js';
+import { enrollInOnboardingDrip } from '../services/onboarding-drip.js';
+import { logger } from '../lib/logger.js';
 import { createHash, randomBytes } from 'crypto';
 
 export const authRouter = Router();
@@ -130,6 +132,14 @@ authRouter.post('/signup', async (req: Request, res: Response) => {
          ON CONFLICT (user_id) DO NOTHING`,
         [u.id]
       );
+    }
+
+    // #1044 — enrol importers into the onboarding drip sequence. Best-effort:
+    // a failure here must not fail signup.
+    if (role === 'importer') {
+      await enrollInOnboardingDrip(u.id).catch((err) => {
+        logger.error({ err, userId: u.id }, 'onboarding drip enrolment failed');
+      });
     }
 
     const sessionId = await createSession(
