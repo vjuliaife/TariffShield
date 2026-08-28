@@ -25,11 +25,15 @@ import { kycRouter } from './routes/kyc.js';
 import { startComplianceReportScheduler } from './jobs/compliance-report.js';
 import { startImporterMetricsScheduler } from './jobs/refresh-importer-metrics.js';
 import { startContractEventsPartitionScheduler } from './jobs/ensure-contract-events-partitions.js';
+import { startSlaBreachChecker } from './jobs/sla-breach-checker.js';
 import { suretyLicenseRouter } from './routes/surety-license.js';
 import { regulatoryRouter } from './routes/regulatory.js';
 import { healthRouter } from './routes/health.js';
 import { httpLogger, logger } from './lib/logger.js';
 import { notificationsRouter } from './routes/notifications.js';
+import { upgradeSubscriptionsRouter } from './routes/upgrade-subscriptions.js';
+import { bondAnnotationsRouter } from './routes/bond-annotations.js';
+import { slaRouter } from './routes/sla.js';
 
 const app = express();
 app.use(httpLogger);
@@ -319,6 +323,9 @@ app.use('/account', tosRouter);
 app.use('/privacy', privacyRouter);
 app.use('/surety-license', suretyLicenseRouter);
 app.use('/notifications', notificationsRouter);
+app.use('/upgrade-subscriptions', upgradeSubscriptionsRouter);
+app.use('/bond-annotations', bondAnnotationsRouter);
+app.use('/sla', slaRouter);
 app.use('/api/v1/regulatory', regulatoryRouter);
 app.use('/bonds', bondWebhookRouter); // unauthenticated DocuSign webhook
 app.use('/api', bondSignaturesRouter); // authenticated bond signature routes
@@ -345,6 +352,7 @@ async function start() {
   startComplianceReportScheduler();
   startImporterMetricsScheduler();
   startContractEventsPartitionScheduler();
+  startSlaBreachChecker();
   app.listen(env.PORT, () => {
     logger.info(
       {

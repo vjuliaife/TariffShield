@@ -10,17 +10,26 @@ export function DepositWizard({
   importerId,
   bucket,
   onDone,
+  onCancel,
   setError,
 }: {
   importerId: string;
   bucket: 'collateral' | 'reserve';
   onDone: () => Promise<void>;
+  onCancel?: () => void;
   setError: (e: FormattedError | string | null) => void;
 }) {
   const [step, setStep] = useState<Step>('amount');
   const [xlm, setXlm] = useState('50');
   const [txHash, setTxHash] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  function handleCancel() {
+    setStep('amount');
+    setXlm('50');
+    setTxHash(null);
+    onCancel?.();
+  }
 
   async function handleDeposit() {
     setBusy(true);
@@ -72,10 +81,10 @@ export function DepositWizard({
           </div>
           <div className="flex gap-2">
             <button
-              onClick={() => setStep('amount')}
+              onClick={handleCancel}
               className="flex-1 rounded-md border border-border px-3 py-1.5 text-sm hover:bg-card"
             >
-              Back
+              Cancel
             </button>
             <button
               onClick={() => setStep('confirm')}
@@ -97,12 +106,14 @@ export function DepositWizard({
             </p>
           </div>
           <div className="flex gap-2">
-            <button
-              onClick={() => setStep('preview')}
-              className="flex-1 rounded-md border border-border px-3 py-1.5 text-sm hover:bg-card"
-            >
-              Back
-            </button>
+            {!busy && (
+              <button
+                onClick={handleCancel}
+                className="flex-1 rounded-md border border-border px-3 py-1.5 text-sm hover:bg-card"
+              >
+                Cancel
+              </button>
+            )}
             <button
               onClick={handleDeposit}
               disabled={busy}

@@ -1,10 +1,25 @@
 'use client';
 
-import { useState } from 'react';
-import { type ContractEvent } from '@/lib/api';
+import { useState, useEffect, useRef } from 'react';
+import { type ContractEvent, type BondAnnotation, api } from '@/lib/api';
 
-export function BondTimeline({ events }: { events: ContractEvent[] }) {
+export function BondTimeline({
+  events,
+  importerId,
+  userRole,
+}: {
+  events: ContractEvent[];
+  importerId: string;
+  userRole?: 'importer' | 'surety_admin';
+}) {
   const [currentMonth, setCurrentMonth] = useState(new Date());
+  const [selectedEvent, setSelectedEvent] = useState<ContractEvent | null>(null);
+  const [annotations, setAnnotations] = useState<BondAnnotation[]>([]);
+  const [newNote, setNewNote] = useState('');
+  const [loadingAnnotations, setLoadingAnnotations] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editNote, setEditNote] = useState('');
+  const popoverRef = useRef<HTMLDivElement>(null);
 
   const year = currentMonth.getFullYear();
   const month = currentMonth.getMonth();
@@ -51,8 +66,76 @@ export function BondTimeline({ events }: { events: ContractEvent[] }) {
   const prevMonth = () => setCurrentMonth(new Date(year, month - 1));
   const nextMonth = () => setCurrentMonth(new Date(year, month + 1));
 
+  const handleEventClick = async (event: ContractEvent) => {
+    if (selectedEvent?.id === event.id) {
+      setSelectedEvent(null);
+      setAnnotations([]);
+      return;
+    }
+    setSelectedEvent(event);
+    setLoadingAnnotations(true);
+    try {
+      const result = await api.getEventAnnotations(event.id);
+      setAnnotations(result.annotations);
+    } catch {
+      setAnnotations([]);
+    } finally {
+      setLoadingAnnotations(false);
+    }
+  };
+
+  const handleAddAnnotation = async () => {
+    if (!newNote.trim() || !selectedEvent) return;
+    try {
+      const result = await api.addAnnotation({
+        event_id: selectedEvent.id,
+        importer_id: importerId,
+        note: newNote.trim(),
+      });
+      setAnnotations([result.annotation, ...annotations]);
+      setNewNote('');
+    } catch {
+      // silently fail
+    }
+  };
+
+  const handleUpdateAnnotation = async (id: string) => {
+    if (!editNote.trim()) return;
+    try {
+      const result = await api.updateAnnotation(id, editNote.trim());
+      setAnnotations(annotations.map((a) => (a.id === id ? result.annotation : a)));
+      setEditingId(null);
+      setEditNote('');
+    } catch {
+      // silently fail
+    }
+  };
+
+  const handleDeleteAnnotation = async (id: string) => {
+    try {
+      await api.deleteAnnotation(id);
+      setAnnotations(annotations.filter((a) => a.id !== id));
+    } catch {
+      // silently fail
+    }
+  };
+
+  // Close popover on outside click
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+        setSelectedEvent(null);
+        setAnnotations([]);
+      }
+    }
+    if (selectedEvent) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [selectedEvent]);
+
   return (
-    <div className="mt-10">
+    <div className="mt-10 relative">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">Bond Timeline</h2>
         <div className="flex gap-2">
@@ -98,13 +181,14 @@ export function BondTimeline({ events }: { events: ContractEvent[] }) {
                   <p className="font-semibold">{date.getDate()}</p>
                   <div className="mt-1 space-y-0.5">
                     {dayEvents.slice(0, 2).map((e) => (
-                      <div
+                      <button
                         key={e.id}
-                        className={`px-1 py-0.5 rounded text-xs truncate font-medium ${getEventColor(e.kind)}`}
-                        title={e.kind}
+                        onClick={() => handleEventClick(e)}
+                        className={`w-full text-left px-1 py-0.5 rounded text-xs truncate font-medium ${getEventColor(e.kind)} hover:opacity-80 cursor-pointer ${selectedEvent?.id === e.id ? 'ring-1 ring-accent' : ''}`}
+                        title={`${e.kind} — click to view annotations`}
                       >
                         {e.kind.split('_').pop()}
-                      </div>
+                      </button>
                     ))}
                     {dayEvents.length > 2 && (
                       <div className="text-xs text-muted px-1">+{dayEvents.length - 2} more</div>
@@ -116,6 +200,107 @@ export function BondTimeline({ events }: { events: ContractEvent[] }) {
           )}
         </div>
       </div>
+
+      {/* Annotation popover */}
+      {selectedEvent && (
+        <div
+          ref={popoverRef}
+          className="absolute z-50 mt-2 w-80 rounded-lg border border-border bg-card shadow-lg p-3"
+          style={{ top: '100%', right: 0 }}
+        >
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-sm font-semibold">{selectedEvent.kind.replace(/_/g, ' ')}</h3>
+            <button
+              onClick={() => {
+                setSelectedEvent(null);
+                setAnnotations([]);
+              }}
+              className="text-muted hover:text-foreground text-xs"
+            >
+              ✕
+            </button>
+          </div>
+          <p className="text-xs text-muted mb-2">
+            {new Date(selectedEvent.createdAt).toLocaleString()}
+          </p>
+
+          {/* Annotations list */}
+          <div className="max-h-48 overflow-y-auto space-y-2 mb-2">
+            {loadingAnnotations ? (
+              <p className="text-xs text-muted">Loading annotations…</p>
+            ) : annotations.length === 0 ? (
+              <p className="text-xs text-muted italic">No annotations yet</p>
+            ) : (
+              annotations.map((ann) => (
+                <div key={ann.id} className="text-xs border border-border rounded p-2">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-muted">
+                      {ann.authorRole === 'surety_admin' ? 'Admin' : 'Importer'} ·{' '}
+                      {new Date(ann.createdAt).toLocaleDateString()}
+                    </span>
+                    {userRole === ann.authorRole && (
+                      <div className="flex gap-1">
+                        <button
+                          onClick={() => {
+                            setEditingId(ann.id);
+                            setEditNote(ann.note);
+                          }}
+                          className="text-accent hover:underline"
+                        >
+                          edit
+                        </button>
+                        <button
+                          onClick={() => handleDeleteAnnotation(ann.id)}
+                          className="text-danger hover:underline"
+                        >
+                          del
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  {editingId === ann.id ? (
+                    <div className="flex gap-1">
+                      <input
+                        value={editNote}
+                        onChange={(e) => setEditNote(e.target.value)}
+                        className="flex-1 rounded border border-border px-1 py-0.5 text-xs"
+                      />
+                      <button
+                        onClick={() => handleUpdateAnnotation(ann.id)}
+                        className="text-accent text-xs"
+                      >
+                        save
+                      </button>
+                    </div>
+                  ) : (
+                    <p>{ann.note}</p>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+
+          {/* Add annotation */}
+          {userRole && (
+            <div className="flex gap-1">
+              <input
+                value={newNote}
+                onChange={(e) => setNewNote(e.target.value)}
+                placeholder="Add a note…"
+                className="flex-1 rounded border border-border px-2 py-1 text-xs"
+                onKeyDown={(e) => e.key === 'Enter' && handleAddAnnotation()}
+              />
+              <button
+                onClick={handleAddAnnotation}
+                disabled={!newNote.trim()}
+                className="rounded bg-accent text-accent-foreground px-2 py-1 text-xs hover:opacity-90 disabled:opacity-50"
+              >
+                Add
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {events.length > 0 && (
         <div className="mt-4 text-xs text-muted">
