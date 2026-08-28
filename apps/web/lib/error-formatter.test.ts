@@ -67,3 +67,56 @@ describe('Issue #1067 — User-friendly error formatting and technical fallbacks
     assert.equal(isTechnicalErrorMessage('Please enter a valid amount'), false);
   });
 });
+
+describe('Issue #1068 — Tiered error banner severity', () => {
+  it('tags recoverable validation/input errors as warning', () => {
+    const insufficientFunds = new ApiError(400, 'insufficient collateral balance');
+    assert.equal(formatApiError(insufficientFunds).severity, 'warning');
+
+    const exceedsExcess = new ApiError(400, 'withdraw amount exceeds available excess collateral');
+    assert.equal(formatApiError(exceedsExcess).severity, 'warning');
+
+    const htsValidation = new ApiError(
+      400,
+      'HTS rate validation failed: one or more line items are underreported'
+    );
+    assert.equal(formatApiError(htsValidation).severity, 'warning');
+
+    const invalidInput = new ApiError(400, 'invalid input: amount must be positive');
+    assert.equal(formatApiError(invalidInput).severity, 'warning');
+  });
+
+  it('tags business-rule rejections and compliance failures as danger', () => {
+    const sanctions = new ApiError(403, 'Importer failed OFAC sanctions screening');
+    assert.equal(formatApiError(sanctions).severity, 'danger');
+
+    const alreadyRegistered = new ApiError(409, 'importer already registered');
+    assert.equal(formatApiError(alreadyRegistered).severity, 'danger');
+
+    const kyc = new ApiError(403, 'KYC approval required');
+    assert.equal(formatApiError(kyc).severity, 'danger');
+  });
+
+  it('tags technical/system failures as danger', () => {
+    const rawSql = new Error('duplicate key value violates unique constraint "importers_ein_key"');
+    assert.equal(formatApiError(rawSql).severity, 'danger');
+
+    const rawConn = new Error('connect ECONNREFUSED 127.0.0.1:5432');
+    assert.equal(formatApiError(rawConn).severity, 'danger');
+  });
+
+  it('defaults unclassified errors to danger as the safer fallback', () => {
+    const unknown = new Error('something unexpected happened');
+    assert.equal(formatApiError(unknown).severity, 'danger');
+  });
+
+  it('passes through an already-formatted error unchanged, including its severity', () => {
+    const already = {
+      userMessage: 'Custom message',
+      rawMessage: 'raw',
+      isTechnical: false,
+      severity: 'warning' as const,
+    };
+    assert.deepEqual(formatApiError(already), already);
+  });
+});
