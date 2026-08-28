@@ -65,6 +65,17 @@ export interface ImporterMetrics {
   refreshedAt: string;
 }
 
+export interface BondAnnotation {
+  id: string;
+  eventId: string;
+  importerId: string;
+  authorId: string;
+  authorRole: 'importer' | 'surety_admin';
+  note: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 async function request<T>(
   path: string,
   options: { method?: string; body?: unknown; auth?: boolean } = {}
@@ -165,6 +176,21 @@ export const api = {
     request<{ clawedStroops: string; txHash: string; txUrl: string }>(`/importers/${id}/clawback`, {
       method: 'POST',
     }),
+
+  // ── Bond timeline annotations (#1046) ─────────────────────────────────────
+  getEventAnnotations: (eventId: string) =>
+    request<{ annotations: BondAnnotation[] }>(`/bond-annotations/event/${eventId}`),
+  getImporterAnnotations: (importerId: string) =>
+    request<{ annotations: BondAnnotation[] }>(`/bond-annotations/${importerId}`),
+  addAnnotation: (b: { event_id: string; importer_id: string; note: string }) =>
+    request<{ annotation: BondAnnotation }>('/bond-annotations', { method: 'POST', body: b }),
+  updateAnnotation: (id: string, note: string) =>
+    request<{ annotation: BondAnnotation }>(`/bond-annotations/${id}`, {
+      method: 'PATCH',
+      body: { note },
+    }),
+  deleteAnnotation: (id: string) =>
+    request<{ success: boolean }>(`/bond-annotations/${id}`, { method: 'DELETE' }),
 };
 
 export function stroopsToXlm(stroops: string | bigint | number): string {

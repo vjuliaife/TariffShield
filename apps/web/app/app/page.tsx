@@ -327,7 +327,7 @@ function ImporterDashboard() {
 
         <ErrorBanner error={error} className="mt-4" />
 
-        <BondTimeline events={events} />
+        <BondTimeline events={events} importerId={importer.id} userRole="importer" />
 
         <div className="mt-10">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">

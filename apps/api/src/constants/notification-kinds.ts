@@ -8,6 +8,10 @@ export const NOTIFICATION_KINDS = {
   KYC_REJECTED: 'kyc_rejected',
   TARIFF_SPIKE: 'tariff_spike',
   EVENT_RECEIVED: 'event_received',
+  UPGRADE_PROPOSED: 'upgrade_proposed',
+  UPGRADE_APPROVED: 'upgrade_approved',
+  UPGRADE_CANCELLED: 'upgrade_cancelled',
+  SLA_BREACH: 'sla_breach',
 } as const;
 
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[keyof typeof NOTIFICATION_KINDS];
