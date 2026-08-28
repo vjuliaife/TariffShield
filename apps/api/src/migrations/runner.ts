@@ -1,10 +1,27 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
+import type { PoolClient } from 'pg';
 import { pool } from '../db.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+interface MigrationModule {
+  up: (client: PoolClient) => Promise<void>;
+  down: (client: PoolClient) => Promise<void>;
+  // Set by a migration that runs CREATE/DROP INDEX CONCURRENTLY (or any
+  // other statement Postgres refuses to run inside a transaction block —
+  // see PreventInTransactionBlock in Postgres's own source). Such a
+  // migration is run on its own connection with no surrounding BEGIN/COMMIT,
+  // so it does not get the same all-or-nothing rollback guarantee the rest
+  // of the chain gets: if it fails partway through, whatever it already
+  // created stays behind and must be cleaned up manually before retrying.
+  // CONCURRENTLY is designed to leave an INVALID index behind on failure
+  // rather than silently rolling back, precisely so it never takes a table
+  // lock — so this is Postgres's own tradeoff, not one this runner adds.
+  nonTransactional?: boolean;
+}
 
 export async function runMigrations(action: 'up' | 'rollback' = 'up'): Promise<void> {
   const client = await pool.connect();
@@ -55,27 +72,48 @@ export async function runMigrations(action: 'up' | 'rollback' = 'up'): Promise<v
       }
 
       console.log(`Running ${pending.length} pending migrations...`);
-      await client.query('BEGIN');
-      try {
-        for (const m of pending) {
-          const filePath = path.join(__dirname, m.filename);
-          const fileUrl = pathToFileURL(filePath).href;
-          const mod = await import(fileUrl);
-          if (typeof mod.up !== 'function') {
-            throw new Error(`Migration ${m.filename} does not export an up function.`);
+      for (const m of pending) {
+        const filePath = path.join(__dirname, m.filename);
+        const fileUrl = pathToFileURL(filePath).href;
+        const mod = (await import(fileUrl)) as MigrationModule;
+        if (typeof mod.up !== 'function') {
+          throw new Error(`Migration ${m.filename} does not export an up function.`);
+        }
+
+        if (mod.nonTransactional) {
+          // CREATE/DROP INDEX CONCURRENTLY (and similarly-restricted
+          // statements) are rejected by Postgres inside any transaction
+          // block, including one opened by a previous iteration of this
+          // same loop — so this migration gets its own connection and runs
+          // with no surrounding BEGIN/COMMIT at all.
+          const soloClient = await pool.connect();
+          try {
+            await mod.up(soloClient);
+            await soloClient.query(
+              'INSERT INTO schema_migrations (version, name) VALUES ($1, $2)',
+              [m.version, m.name]
+            );
+          } finally {
+            soloClient.release();
           }
+          console.log(`Successfully applied migration (non-transactional): ${m.name}`);
+          continue;
+        }
+
+        await client.query('BEGIN');
+        try {
           await mod.up(client);
           await client.query('INSERT INTO schema_migrations (version, name) VALUES ($1, $2)', [
             m.version,
             m.name,
           ]);
-          console.log(`Successfully applied migration: ${m.name}`);
+          await client.query('COMMIT');
+        } catch (err) {
+          await client.query('ROLLBACK');
+          console.error(`Migration ${m.name} failed, rolled back.`);
+          throw err;
         }
-        await client.query('COMMIT');
-      } catch (err) {
-        await client.query('ROLLBACK');
-        console.error('Migration transaction failed, rolled back changes.');
-        throw err;
+        console.log(`Successfully applied migration: ${m.name}`);
       }
     } else if (action === 'rollback') {
       // Find the highest applied migration
@@ -96,22 +134,34 @@ export async function runMigrations(action: 'up' | 'rollback' = 'up'): Promise<v
       }
 
       console.log(`Rolling back migration: ${m.name}...`);
-      await client.query('BEGIN');
-      try {
-        const filePath = path.join(__dirname, m.filename);
-        const fileUrl = pathToFileURL(filePath).href;
-        const mod = await import(fileUrl);
-        if (typeof mod.down !== 'function') {
-          throw new Error(`Migration ${m.filename} does not export a down function.`);
+      const filePath = path.join(__dirname, m.filename);
+      const fileUrl = pathToFileURL(filePath).href;
+      const mod = (await import(fileUrl)) as MigrationModule;
+      if (typeof mod.down !== 'function') {
+        throw new Error(`Migration ${m.filename} does not export a down function.`);
+      }
+
+      if (mod.nonTransactional) {
+        const soloClient = await pool.connect();
+        try {
+          await mod.down(soloClient);
+          await soloClient.query('DELETE FROM schema_migrations WHERE version = $1', [version]);
+        } finally {
+          soloClient.release();
         }
-        await mod.down(client);
-        await client.query('DELETE FROM schema_migrations WHERE version = $1', [version]);
-        await client.query('COMMIT');
-        console.log(`Successfully rolled back migration: ${m.name}`);
-      } catch (err) {
-        await client.query('ROLLBACK');
-        console.error('Rollback transaction failed, rolled back changes.');
-        throw err;
+        console.log(`Successfully rolled back migration (non-transactional): ${m.name}`);
+      } else {
+        await client.query('BEGIN');
+        try {
+          await mod.down(client);
+          await client.query('DELETE FROM schema_migrations WHERE version = $1', [version]);
+          await client.query('COMMIT');
+          console.log(`Successfully rolled back migration: ${m.name}`);
+        } catch (err) {
+          await client.query('ROLLBACK');
+          console.error('Rollback transaction failed, rolled back changes.');
+          throw err;
+        }
       }
     }
   } finally {

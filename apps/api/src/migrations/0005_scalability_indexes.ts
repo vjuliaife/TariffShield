@@ -7,6 +7,10 @@
 
 import type { PoolClient } from 'pg';
 
+// CREATE INDEX CONCURRENTLY is rejected by Postgres inside any transaction
+// block — see runner.ts's MigrationModule.nonTransactional doc comment.
+export const nonTransactional = true;
+
 export const up = async (client: PoolClient): Promise<void> => {
   // 1. Composite index for surety license listing pagination
   // Supports: ORDER BY created_at DESC, id DESC with cursor-based pagination
