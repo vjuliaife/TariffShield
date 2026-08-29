@@ -134,11 +134,23 @@ export function BondTimeline({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [selectedEvent]);
 
+  const now = new Date();
+  const isViewingCurrentMonth =
+    currentMonth.getFullYear() === now.getFullYear() &&
+    currentMonth.getMonth() === now.getMonth();
+
   return (
     <div className="mt-10 relative">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">Bond Timeline</h2>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setCurrentMonth(new Date())}
+            disabled={isViewingCurrentMonth}
+            className="text-xs px-2 py-1 border border-border rounded hover:bg-card disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Today
+          </button>
           <button
             onClick={prevMonth}
             className="text-xs px-2 py-1 border border-border rounded hover:bg-card"
@@ -156,6 +168,12 @@ export function BondTimeline({
           </button>
         </div>
       </div>
+
+      {events.length === 0 && (
+        <div className="mb-4 rounded-md border border-border bg-card p-3 text-xs text-muted italic text-center">
+          No bond activity yet this month
+        </div>
+      )}
 
       <div className="rounded-lg border border-border bg-card overflow-hidden">
         <div className="grid grid-cols-7 bg-muted/10">
