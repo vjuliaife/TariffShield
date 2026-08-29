@@ -34,6 +34,11 @@ import { notificationsRouter } from './routes/notifications.js';
 import { upgradeSubscriptionsRouter } from './routes/upgrade-subscriptions.js';
 import { bondAnnotationsRouter } from './routes/bond-annotations.js';
 import { slaRouter } from './routes/sla.js';
+import { developerRouter } from './routes/developer.js';
+import { onboardingRouter } from './routes/onboarding.js';
+import { apiKeyUsageMeter } from './services/api-key-usage.js';
+import { startApiKeyUsagePruneScheduler } from './jobs/prune-api-key-usage.js';
+import { startOnboardingDripScheduler } from './services/onboarding-drip.js';
 
 const app = express();
 app.use(httpLogger);
@@ -254,6 +259,9 @@ app.use(
 
 app.use(express.json({ limit: '1mb' }));
 
+// #1043 — meter traffic that presents a recognised API key (no-op otherwise).
+app.use(apiKeyUsageMeter);
+
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 20,
@@ -326,6 +334,8 @@ app.use('/notifications', notificationsRouter);
 app.use('/upgrade-subscriptions', upgradeSubscriptionsRouter);
 app.use('/bond-annotations', bondAnnotationsRouter);
 app.use('/sla', slaRouter);
+app.use('/developer', developerRouter);
+app.use('/onboarding', onboardingRouter);
 app.use('/api/v1/regulatory', regulatoryRouter);
 app.use('/bonds', bondWebhookRouter); // unauthenticated DocuSign webhook
 app.use('/api', bondSignaturesRouter); // authenticated bond signature routes
@@ -353,6 +363,8 @@ async function start() {
   startImporterMetricsScheduler();
   startContractEventsPartitionScheduler();
   startSlaBreachChecker();
+  startApiKeyUsagePruneScheduler();
+  startOnboardingDripScheduler();
   app.listen(env.PORT, () => {
     logger.info(
       {
