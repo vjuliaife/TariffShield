@@ -12,6 +12,7 @@ export default function SuretyDashboard() {
   const [importers, setImporters] = useState<Importer[] | null>(null);
   const [metrics, setMetrics] = useState<ImporterMetrics | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [metricsError, setMetricsError] = useState(false);
   const [signupUrl, setSignupUrl] = useState('');
   const [copied, setCopied] = useState(false);
 
@@ -56,8 +57,10 @@ export default function SuretyDashboard() {
     try {
       const s = await api.getStats();
       setMetrics(s.metrics);
+      setMetricsError(false);
     } catch (e) {
       console.error('failed to load dashboard stats', e);
+      setMetricsError(true);
     }
   }
 
@@ -89,6 +92,11 @@ export default function SuretyDashboard() {
             <MetricTile label="Avg. balance" value={`${stroopsToXlm(metrics.avgBalance)} XLM`} />
             <MetricTile label="Compliance rate" value={`${metrics.complianceRate}%`} />
           </div>
+        ) : metricsError ? (
+          <p className="mt-6 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
+            Metrics unavailable. Portfolio totals couldn&apos;t be loaded — the importer list below
+            is unaffected.
+          </p>
         ) : null}
 
         {error ? (
