@@ -22,6 +22,7 @@ import { Nav } from '@/components/Nav';
 import { HealthScore } from '@/components/HealthScore';
 import { DepositWizard } from '@/components/DepositWizard';
 import { BondTimeline } from '@/components/BondTimeline';
+import { ComplianceExpirationCalendar } from '@/components/ComplianceExpirationCalendar';
 import { DashboardSkeleton } from '@/components/DashboardSkeleton';
 import { Spinner } from '@/components/Spinner';
 import { ErrorBanner } from '@/components/ErrorBanner';
@@ -182,8 +183,8 @@ function ImporterDashboard() {
         {onc.isClawbacked ? (
           <div className="mt-6 rounded-lg border border-danger bg-danger/10 px-4 py-3 text-sm text-danger">
             <strong>Account frozen by surety.</strong> All collateral + reserve has been clawed
-            back. No further deposits or withdrawals allowed. Contact your surety support team
-            and review the on-chain event log below before taking another action.
+            back. No further deposits or withdrawals allowed. Contact your surety support team and
+            review the on-chain event log below before taking another action.
           </div>
         ) : null}
 
@@ -328,6 +329,10 @@ function ImporterDashboard() {
         <ErrorBanner error={error} className="mt-4" />
 
         <BondTimeline events={events} importerId={importer.id} userRole="importer" />
+
+        <div className="mt-8">
+          <ComplianceExpirationCalendar importerId={importer.id} />
+        </div>
 
         <div className="mt-10">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">

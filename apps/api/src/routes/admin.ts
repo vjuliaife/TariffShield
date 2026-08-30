@@ -23,8 +23,11 @@ const AuditLogQuerySchema = z.object({
   action: z.string().optional(),
   from: z.string().datetime({ offset: true }).optional(),
   to: z.string().datetime({ offset: true }).optional(),
+  search: z.string().optional(),
+  format: z.enum(['json', 'csv']).optional(),
+  export: z.enum(['json', 'csv']).optional(),
   page: z.coerce.number().int().min(1).default(1),
-  per_page: z.coerce.number().int().min(1).max(200).default(50),
+  per_page: z.coerce.number().int().min(1).max(1000).default(50),
 });
 
 adminRouter.get('/audit-log', requireRole('surety_admin'), async (req: Request, res: Response) => {
@@ -33,7 +36,18 @@ adminRouter.get('/audit-log', requireRole('surety_admin'), async (req: Request, 
     res.status(400).json({ error: 'invalid query params', details: parse.error.issues });
     return;
   }
-  const { actor_user_id, action, from, to, page, per_page } = parse.data;
+  const {
+    actor_user_id,
+    action,
+    from,
+    to,
+    search,
+    format,
+    export: exportParam,
+    page,
+    per_page,
+  } = parse.data;
+  const isCsv = format === 'csv' || exportParam === 'csv' || req.headers.accept === 'text/csv';
   const offset = (page - 1) * per_page;
 
   const conditions: string[] = [];
@@ -41,34 +55,94 @@ adminRouter.get('/audit-log', requireRole('surety_admin'), async (req: Request, 
 
   if (actor_user_id) {
     params.push(actor_user_id);
-    conditions.push(`actor_user_id = $${params.length}`);
+    conditions.push(`al.actor_user_id = $${params.length}`);
   }
   if (action) {
     params.push(action);
-    conditions.push(`action = $${params.length}`);
+    conditions.push(`al.action = $${params.length}`);
   }
   if (from) {
     params.push(from);
-    conditions.push(`created_at >= $${params.length}`);
+    conditions.push(`al.created_at >= $${params.length}`);
   }
   if (to) {
     params.push(to);
-    conditions.push(`created_at <= $${params.length}`);
+    conditions.push(`al.created_at <= $${params.length}`);
+  }
+  if (search && search.trim().length > 0) {
+    params.push(`%${search.trim()}%`);
+    conditions.push(
+      `(al.action ILIKE $${params.length} OR al.payload::text ILIKE $${params.length} OR u.email ILIKE $${params.length} OR al.target_id::text ILIKE $${params.length})`
+    );
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
+  if (isCsv) {
+    // Export all matching rows for CSV
+    const csvResult = await pool.query(
+      `SELECT al.id, al.actor_user_id, u.email AS actor_email, al.action, al.target_id, al.payload, al.created_at
+         FROM audit_log al
+         LEFT JOIN users u ON u.id = al.actor_user_id
+         ${where}
+         ORDER BY al.created_at DESC
+         LIMIT 5000`,
+      params
+    );
+
+    const escapeCsv = (val: unknown): string => {
+      if (val === null || val === undefined) return '';
+      const str = typeof val === 'object' ? JSON.stringify(val) : String(val);
+      if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
+        return `"${str.replace(/"/g, '""')}"`;
+      }
+      return str;
+    };
+
+    const header = [
+      'id',
+      'timestamp',
+      'actor_email',
+      'actor_user_id',
+      'action',
+      'target_id',
+      'payload',
+    ];
+    const rows = csvResult.rows.map((row) =>
+      [
+        escapeCsv(row.id),
+        escapeCsv((row.created_at as Date).toISOString()),
+        escapeCsv(row.actor_email),
+        escapeCsv(row.actor_user_id),
+        escapeCsv(row.action),
+        escapeCsv(row.target_id),
+        escapeCsv(row.payload),
+      ].join(',')
+    );
+
+    const csvContent = [header.join(','), ...rows].join('\r\n');
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="audit-log-export.csv"');
+    res.status(200).send(csvContent);
+    return;
+  }
+
   const countResult = await pool.query<{ count: string }>(
-    `SELECT COUNT(*) AS count FROM audit_log ${where}`,
+    `SELECT COUNT(*) AS count
+       FROM audit_log al
+       LEFT JOIN users u ON u.id = al.actor_user_id
+       ${where}`,
     params
   );
   const total = parseInt(countResult.rows[0]?.count ?? '0', 10);
 
   params.push(per_page, offset);
   const dataResult = await pool.query(
-    `SELECT id, actor_user_id, action, target_id, payload, created_at
-       FROM audit_log ${where}
-       ORDER BY created_at DESC
+    `SELECT al.id, al.actor_user_id, u.email AS actor_email, al.action, al.target_id, al.payload, al.created_at
+       FROM audit_log al
+       LEFT JOIN users u ON u.id = al.actor_user_id
+       ${where}
+       ORDER BY al.created_at DESC
        LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params
   );

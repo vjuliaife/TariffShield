@@ -494,9 +494,10 @@ importersRouter.get('/:id/collateral-status', async (req: Request, res: Response
 // --- Synthetic CBP tariff CSV upload — recomputes required_collateral on-chain ---
 
 const TariffLineItemSchema = z.object({
-  htsCode: z.string(),
+  sku: z.string().optional(),
+  htsCode: z.string().optional(),
   value: z.coerce.number().positive(),
-  dutyRate: z.coerce.number().min(0),
+  dutyRate: z.coerce.number().min(0).optional(),
 });
 
 const TariffUploadSchema = z.object({
@@ -581,11 +582,70 @@ importersRouter.post('/:id/upload-tariff-csv', async (req: Request, res: Respons
     return;
   }
 
+  // ── SKU Mapping Resolution ────────────────────────────────────────────────
+  // Resolve any items carrying a product SKU against the importer's active catalog mapping.
+  const activeMappings = await pool.query(
+    'SELECT sku, hts_code, duty_rate FROM importer_sku_mappings WHERE importer_id = $1 AND is_active = true',
+    [importer.id]
+  );
+  const skuMap = new Map<string, { htsCode: string; dutyRate?: number }>();
+  for (const row of activeMappings.rows) {
+    skuMap.set(row.sku, {
+      htsCode: row.hts_code,
+      dutyRate:
+        row.duty_rate !== null && row.duty_rate !== undefined ? Number(row.duty_rate) : undefined,
+    });
+  }
+
+  const unmappedSkus: string[] = [];
+  const resolvedLineItems: Array<{
+    sku?: string;
+    htsCode: string;
+    value: number;
+    dutyRate: number;
+  }> = [];
+
+  for (const item of parse.data.lineItems) {
+    let htsCode = item.htsCode;
+    let dutyRate = item.dutyRate;
+
+    if (!htsCode && item.sku) {
+      const mapped = skuMap.get(item.sku);
+      if (mapped) {
+        htsCode = mapped.htsCode;
+        if (dutyRate === undefined && mapped.dutyRate !== undefined) {
+          dutyRate = mapped.dutyRate;
+        }
+      } else {
+        unmappedSkus.push(item.sku);
+      }
+    } else if (!htsCode) {
+      unmappedSkus.push(item.sku || 'UNKNOWN_SKU');
+    }
+
+    if (htsCode) {
+      resolvedLineItems.push({
+        sku: item.sku,
+        htsCode,
+        value: item.value,
+        dutyRate: dutyRate ?? 0,
+      });
+    }
+  }
+
+  if (unmappedSkus.length > 0) {
+    res.status(422).json({
+      error: 'Unmapped SKUs found in tariff upload',
+      unmappedSkus: Array.from(new Set(unmappedSkus)),
+    });
+    return;
+  }
+
   // ── HTS statutory rate validation ──────────────────────────────────────────
   // Cross-reference every line item's declared duty rate against the USITC HTS
   // schedule before feeding the rates into the collateral computation.
   const htsValidation = await validateHtsRates(
-    parse.data.lineItems.map((item) => ({
+    resolvedLineItems.map((item) => ({
       hts_code: item.htsCode,
       declared_rate: item.dutyRate,
     }))
@@ -618,7 +678,7 @@ importersRouter.post('/:id/upload-tariff-csv', async (req: Request, res: Respons
   const validationReport = [];
   let hasBlockError = false;
 
-  for (const item of parse.data.lineItems) {
+  for (const item of resolvedLineItems) {
     const cbpRes = await lookupCbpDutyRate(item.htsCode);
     const cbpRate = cbpRes.dutyRate ?? item.dutyRate;
 
@@ -840,6 +900,271 @@ importersRouter.post('/:id/auto-top-up', async (req: Request, res: Response) => 
   res.status(202).json({ jobId, statusUrl: `/importers/${importer.id}/tx-status/${jobId}` });
 });
 
+// ── #1038: Dual Sign-Off Approval Configuration & Withdrawal Workflow ───────
+
+const DualApprovalConfigSchema = z.object({
+  enabled: z.boolean(),
+  thresholdStroops: z.string().regex(/^\d+$/),
+  secondApproverId: z.string().uuid().nullable().optional(),
+  secondApproverEmail: z.string().email().nullable().optional(),
+});
+
+importersRouter.get('/:id/dual-approval', async (req: Request, res: Response) => {
+  const importer = await loadImporterFor(req, String(req.params.id ?? ''));
+  if (!importer) {
+    res.status(404).json({ error: 'not found' });
+    return;
+  }
+
+  res.json({
+    enabled: Boolean(importer.dual_approval_enabled),
+    thresholdStroops: String(importer.dual_approval_threshold_stroops ?? '0'),
+    secondApproverId: importer.second_approver_id ?? null,
+    secondApproverEmail: importer.second_approver_email ?? null,
+  });
+});
+
+importersRouter.put('/:id/dual-approval', async (req: Request, res: Response) => {
+  const user = (req as AuthedRequest).user;
+  const importer = await loadImporterFor(req, String(req.params.id ?? ''));
+  if (!importer) {
+    res.status(404).json({ error: 'not found' });
+    return;
+  }
+
+  if (user.role !== 'surety_admin' && importer.user_id !== user.id) {
+    res.status(403).json({ error: 'forbidden' });
+    return;
+  }
+
+  const parse = DualApprovalConfigSchema.safeParse(req.body);
+  if (!parse.success) {
+    res.status(400).json({ error: 'invalid input', details: parse.error.issues });
+    return;
+  }
+
+  const { enabled, thresholdStroops, secondApproverId, secondApproverEmail } = parse.data;
+
+  const result = await pool.query(
+    `UPDATE importers
+       SET dual_approval_enabled = $1,
+           dual_approval_threshold_stroops = $2,
+           second_approver_id = $3,
+           second_approver_email = $4
+     WHERE id = $5
+     RETURNING id, dual_approval_enabled, dual_approval_threshold_stroops, second_approver_id, second_approver_email`,
+    [enabled, thresholdStroops, secondApproverId ?? null, secondApproverEmail ?? null, importer.id]
+  );
+
+  await logAudit(user.id, 'dual_approval_configured', importer.id, {
+    enabled,
+    thresholdStroops,
+    secondApproverId,
+    secondApproverEmail,
+  });
+
+  res.json({
+    enabled: Boolean(result.rows[0]?.dual_approval_enabled),
+    thresholdStroops: String(result.rows[0]?.dual_approval_threshold_stroops ?? '0'),
+    secondApproverId: result.rows[0]?.second_approver_id ?? null,
+    secondApproverEmail: result.rows[0]?.second_approver_email ?? null,
+  });
+});
+
+importersRouter.get('/:id/withdrawal-requests', async (req: Request, res: Response) => {
+  const importer = await loadImporterFor(req, String(req.params.id ?? ''));
+  if (!importer) {
+    res.status(404).json({ error: 'not found' });
+    return;
+  }
+
+  const requests = await pool.query(
+    `SELECT wr.id, wr.importer_id, wr.requested_by, u.email AS requested_by_email,
+            wr.amount_stroops, wr.status, wr.second_approver_id, sa.email AS second_approver_email,
+            wr.approved_by, ap.email AS approved_by_email, wr.rejected_by, rj.email AS rejected_by_email,
+            wr.rejection_reason, wr.job_id, wr.created_at, wr.resolved_at
+       FROM withdrawal_requests wr
+       LEFT JOIN users u ON u.id = wr.requested_by
+       LEFT JOIN users sa ON sa.id = wr.second_approver_id
+       LEFT JOIN users ap ON ap.id = wr.approved_by
+       LEFT JOIN users rj ON rj.id = wr.rejected_by
+      WHERE wr.importer_id = $1
+      ORDER BY wr.created_at DESC`,
+    [importer.id]
+  );
+
+  res.json({ requests: requests.rows });
+});
+
+importersRouter.post(
+  '/:id/withdrawal-requests/:requestId/approve',
+  async (req: Request, res: Response) => {
+    const user = (req as AuthedRequest).user;
+    const importer = await loadImporterFor(req, String(req.params.id ?? ''));
+    if (!importer) {
+      res.status(404).json({ error: 'not found' });
+      return;
+    }
+
+    const reqResult = await pool.query(
+      'SELECT * FROM withdrawal_requests WHERE id = $1 AND importer_id = $2',
+      [req.params.requestId, importer.id]
+    );
+    const wr = reqResult.rows[0];
+    if (!wr) {
+      res.status(404).json({ error: 'withdrawal request not found' });
+      return;
+    }
+
+    if (wr.status !== 'pending') {
+      res.status(400).json({ error: `Cannot approve request with status: ${wr.status}` });
+      return;
+    }
+
+    if (wr.requested_by === user.id && user.role !== 'surety_admin') {
+      res.status(403).json({ error: 'requester cannot self-approve dual sign-off withdrawal' });
+      return;
+    }
+
+    const amlRes = await screenWalletAddress(importer.stellar_address);
+    if (amlRes.riskScore === 'HIGH') {
+      res.status(403).json({ error: 'Transaction blocked pending AML review' });
+      return;
+    }
+
+    const jobId = await enqueueTxSubmit({
+      method: 'withdraw',
+      importerId: importer.id,
+      keypairSecret: importer.stellar_secret_encrypted,
+      args: {
+        importerAddress: importer.stellar_address,
+        sourceAddress: importer.stellar_address,
+        amountStroops: wr.amount_stroops,
+      },
+    });
+
+    await pool.query(
+      `UPDATE withdrawal_requests
+        SET status = 'approved',
+            approved_by = $1,
+            job_id = $2,
+            resolved_at = now()
+      WHERE id = $3`,
+      [user.id, jobId, wr.id]
+    );
+
+    await logAudit(user.id, 'withdraw_approved', importer.id, {
+      withdrawalRequestId: wr.id,
+      amountStroops: wr.amount_stroops,
+      jobId,
+    });
+
+    await invalidateOnChainAccount(importer.id);
+
+    res.json({
+      status: 'approved',
+      jobId,
+      statusUrl: `/importers/${importer.id}/tx-status/${jobId}`,
+    });
+  }
+);
+
+importersRouter.post(
+  '/:id/withdrawal-requests/:requestId/reject',
+  async (req: Request, res: Response) => {
+    const user = (req as AuthedRequest).user;
+    const importer = await loadImporterFor(req, String(req.params.id ?? ''));
+    if (!importer) {
+      res.status(404).json({ error: 'not found' });
+      return;
+    }
+
+    const reqResult = await pool.query(
+      'SELECT * FROM withdrawal_requests WHERE id = $1 AND importer_id = $2',
+      [req.params.requestId, importer.id]
+    );
+    const wr = reqResult.rows[0];
+    if (!wr) {
+      res.status(404).json({ error: 'withdrawal request not found' });
+      return;
+    }
+
+    if (wr.status !== 'pending') {
+      res.status(400).json({ error: `Cannot reject request with status: ${wr.status}` });
+      return;
+    }
+
+    const reason = req.body?.reason ? String(req.body.reason) : null;
+
+    await pool.query(
+      `UPDATE withdrawal_requests
+        SET status = 'rejected',
+            rejected_by = $1,
+            rejection_reason = $2,
+            resolved_at = now()
+      WHERE id = $3`,
+      [user.id, reason, wr.id]
+    );
+
+    await logAudit(user.id, 'withdraw_rejected', importer.id, {
+      withdrawalRequestId: wr.id,
+      amountStroops: wr.amount_stroops,
+      reason,
+    });
+
+    res.json({ status: 'rejected' });
+  }
+);
+
+importersRouter.post(
+  '/:id/withdrawal-requests/:requestId/cancel',
+  async (req: Request, res: Response) => {
+    const user = (req as AuthedRequest).user;
+    const importer = await loadImporterFor(req, String(req.params.id ?? ''));
+    if (!importer) {
+      res.status(404).json({ error: 'not found' });
+      return;
+    }
+
+    const reqResult = await pool.query(
+      'SELECT * FROM withdrawal_requests WHERE id = $1 AND importer_id = $2',
+      [req.params.requestId, importer.id]
+    );
+    const wr = reqResult.rows[0];
+    if (!wr) {
+      res.status(404).json({ error: 'withdrawal request not found' });
+      return;
+    }
+
+    if (wr.status !== 'pending') {
+      res.status(400).json({ error: `Cannot cancel request with status: ${wr.status}` });
+      return;
+    }
+
+    if (wr.requested_by !== user.id && user.role !== 'surety_admin') {
+      res
+        .status(403)
+        .json({ error: 'Only the original requester can cancel a pending withdrawal' });
+      return;
+    }
+
+    await pool.query(
+      `UPDATE withdrawal_requests
+        SET status = 'cancelled',
+            resolved_at = now()
+      WHERE id = $1`,
+      [wr.id]
+    );
+
+    await logAudit(user.id, 'withdraw_cancelled', importer.id, {
+      withdrawalRequestId: wr.id,
+      amountStroops: wr.amount_stroops,
+    });
+
+    res.json({ status: 'cancelled' });
+  }
+);
+
 const WithdrawSchema = z.object({
   amountStroops: z.string().regex(/^\d+$/),
 });
@@ -873,6 +1198,32 @@ importersRouter.post('/:id/withdraw', async (req: Request, res: Response) => {
     return;
   }
 
+  // Dual sign-off threshold check (#1038)
+  const dualEnabled = Boolean(importer.dual_approval_enabled);
+  const threshold = BigInt(importer.dual_approval_threshold_stroops ?? '0');
+  const amountStroops = BigInt(parse.data.amountStroops);
+
+  if (dualEnabled && threshold > 0n && amountStroops >= threshold) {
+    const reqInsert = await pool.query(
+      `INSERT INTO withdrawal_requests (importer_id, requested_by, amount_stroops, status, second_approver_id)
+       VALUES ($1, $2, $3, 'pending', $4)
+       RETURNING id, importer_id, requested_by, amount_stroops, status, second_approver_id, created_at`,
+      [importer.id, user.id, parse.data.amountStroops, importer.second_approver_id ?? null]
+    );
+    const requestRow = reqInsert.rows[0]!;
+    await logAudit(user.id, 'withdraw_requested_pending_approval', importer.id, {
+      amountStroops: parse.data.amountStroops,
+      withdrawalRequestId: requestRow.id,
+    });
+    res.status(202).json({
+      status: 'pending_approval',
+      withdrawalRequestId: requestRow.id,
+      amountStroops: parse.data.amountStroops,
+      message: 'Withdrawal amount exceeds dual sign-off threshold and requires second approval.',
+    });
+    return;
+  }
+
   const jobId = await enqueueTxSubmit({
     method: 'withdraw',
     importerId: importer.id,
@@ -890,6 +1241,358 @@ importersRouter.post('/:id/withdraw', async (req: Request, res: Response) => {
   await invalidateOnChainAccount(importer.id);
 
   res.status(202).json({ jobId, statusUrl: `/importers/${importer.id}/tx-status/${jobId}` });
+});
+
+// ── #1040: Bulk HS Code Mapping Table Import for Product Catalogs ───────────
+
+const SkuMappingItemSchema = z.object({
+  sku: z.string().min(1),
+  htsCode: z.string().min(1),
+  description: z.string().optional(),
+  dutyRate: z.coerce.number().min(0).optional(),
+});
+
+const BulkSkuMappingSchema = z.object({
+  mappings: z.array(SkuMappingItemSchema).optional(),
+  csvText: z.string().optional(),
+});
+
+importersRouter.post('/:id/sku-mappings/bulk', async (req: Request, res: Response) => {
+  const user = (req as AuthedRequest).user;
+  const importer = await loadImporterFor(req, String(req.params.id ?? ''));
+  if (!importer) {
+    res.status(404).json({ error: 'not found' });
+    return;
+  }
+
+  const parse = BulkSkuMappingSchema.safeParse(req.body);
+  if (!parse.success) {
+    res.status(400).json({ error: 'invalid input', details: parse.error.issues });
+    return;
+  }
+
+  let items: Array<{ sku: string; htsCode: string; description?: string; dutyRate?: number }> = [];
+
+  if (parse.data.mappings && parse.data.mappings.length > 0) {
+    items = parse.data.mappings;
+  } else if (parse.data.csvText) {
+    const lines = parse.data.csvText
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0);
+    if (lines.length > 0) {
+      const firstLine = lines[0]!.toLowerCase();
+      const hasHeader = firstLine.includes('sku') || firstLine.includes('hts');
+      const dataLines = hasHeader ? lines.slice(1) : lines;
+
+      for (const line of dataLines) {
+        const parts = line.split(',').map((p) => p.trim().replace(/^["']|["']$/g, ''));
+        if (parts.length >= 2 && parts[0] && parts[1]) {
+          const sku = parts[0];
+          const htsCode = parts[1];
+          const description = parts[2] || undefined;
+          const dutyRate = parts[3] && !isNaN(Number(parts[3])) ? Number(parts[3]) : undefined;
+          items.push({ sku, htsCode, description, dutyRate });
+        }
+      }
+    }
+  }
+
+  if (items.length === 0) {
+    res.status(400).json({ error: 'no valid SKU mapping entries found in payload' });
+    return;
+  }
+
+  const vRes = await pool.query<{ max_version: number | null }>(
+    'SELECT MAX(version) AS max_version FROM importer_sku_mappings WHERE importer_id = $1',
+    [importer.id]
+  );
+  const nextVersion = (vRes.rows[0]?.max_version ?? 0) + 1;
+
+  await pool.query('UPDATE importer_sku_mappings SET is_active = false WHERE importer_id = $1', [
+    importer.id,
+  ]);
+
+  for (const it of items) {
+    await pool.query(
+      `INSERT INTO importer_sku_mappings (importer_id, version, sku, hts_code, description, duty_rate, is_active)
+       VALUES ($1, $2, $3, $4, $5, $6, true)
+       ON CONFLICT (importer_id, version, sku) DO UPDATE
+         SET hts_code = EXCLUDED.hts_code,
+             description = EXCLUDED.description,
+             duty_rate = EXCLUDED.duty_rate,
+             updated_at = now()`,
+      [importer.id, nextVersion, it.sku, it.htsCode, it.description ?? null, it.dutyRate ?? null]
+    );
+  }
+
+  await logAudit(user.id, 'sku_mappings_imported', importer.id, {
+    version: nextVersion,
+    count: items.length,
+  });
+
+  res.status(201).json({
+    success: true,
+    version: nextVersion,
+    count: items.length,
+  });
+});
+
+importersRouter.get('/:id/sku-mappings', async (req: Request, res: Response) => {
+  const importer = await loadImporterFor(req, String(req.params.id ?? ''));
+  if (!importer) {
+    res.status(404).json({ error: 'not found' });
+    return;
+  }
+
+  const { search, version, page = '1', per_page = '50' } = req.query as Record<string, string>;
+  const pageNum = Math.max(1, parseInt(page, 10) || 1);
+  const limit = Math.min(200, Math.max(1, parseInt(per_page, 10) || 50));
+  const offset = (pageNum - 1) * limit;
+
+  const conditions = ['importer_id = $1'];
+  const params: unknown[] = [importer.id];
+
+  if (version) {
+    params.push(parseInt(version, 10));
+    conditions.push(`version = $${params.length}`);
+  } else {
+    conditions.push('is_active = true');
+  }
+
+  if (search && search.trim().length > 0) {
+    params.push(`%${search.trim()}%`);
+    conditions.push(
+      `(sku ILIKE $${params.length} OR hts_code ILIKE $${params.length} OR description ILIKE $${params.length})`
+    );
+  }
+
+  const where = `WHERE ${conditions.join(' AND ')}`;
+  const countResult = await pool.query<{ count: string }>(
+    `SELECT COUNT(*) AS count FROM importer_sku_mappings ${where}`,
+    params
+  );
+  const total = parseInt(countResult.rows[0]?.count ?? '0', 10);
+
+  params.push(limit, offset);
+  const rows = await pool.query(
+    `SELECT id, importer_id, version, sku, hts_code, description, duty_rate, is_active, created_at, updated_at
+       FROM importer_sku_mappings
+       ${where}
+       ORDER BY sku ASC
+       LIMIT $${params.length - 1} OFFSET $${params.length}`,
+    params
+  );
+
+  res.json({
+    mappings: rows.rows,
+    pagination: {
+      total,
+      page: pageNum,
+      per_page: limit,
+      total_pages: Math.ceil(total / limit),
+    },
+  });
+});
+
+importersRouter.post('/:id/sku-mappings', async (req: Request, res: Response) => {
+  const user = (req as AuthedRequest).user;
+  const importer = await loadImporterFor(req, String(req.params.id ?? ''));
+  if (!importer) {
+    res.status(404).json({ error: 'not found' });
+    return;
+  }
+
+  const parse = SkuMappingItemSchema.safeParse(req.body);
+  if (!parse.success) {
+    res.status(400).json({ error: 'invalid input', details: parse.error.issues });
+    return;
+  }
+
+  const { sku, htsCode, description, dutyRate } = parse.data;
+
+  const vRes = await pool.query<{ version: number | null }>(
+    'SELECT version FROM importer_sku_mappings WHERE importer_id = $1 AND is_active = true LIMIT 1',
+    [importer.id]
+  );
+  const currentVersion = vRes.rows[0]?.version ?? 1;
+
+  const result = await pool.query(
+    `INSERT INTO importer_sku_mappings (importer_id, version, sku, hts_code, description, duty_rate, is_active)
+     VALUES ($1, $2, $3, $4, $5, $6, true)
+     ON CONFLICT (importer_id, version, sku) DO UPDATE
+       SET hts_code = EXCLUDED.hts_code,
+           description = EXCLUDED.description,
+           duty_rate = EXCLUDED.duty_rate,
+           is_active = true,
+           updated_at = now()
+     RETURNING id, importer_id, version, sku, hts_code, description, duty_rate, is_active, created_at, updated_at`,
+    [importer.id, currentVersion, sku, htsCode, description ?? null, dutyRate ?? null]
+  );
+
+  await logAudit(user.id, 'sku_mapping_created', importer.id, { sku, htsCode });
+
+  res.status(201).json({ mapping: result.rows[0] });
+});
+
+importersRouter.put('/:id/sku-mappings/:mappingId', async (req: Request, res: Response) => {
+  const user = (req as AuthedRequest).user;
+  const importer = await loadImporterFor(req, String(req.params.id ?? ''));
+  if (!importer) {
+    res.status(404).json({ error: 'not found' });
+    return;
+  }
+
+  const parse = SkuMappingItemSchema.safeParse(req.body);
+  if (!parse.success) {
+    res.status(400).json({ error: 'invalid input', details: parse.error.issues });
+    return;
+  }
+
+  const { sku, htsCode, description, dutyRate } = parse.data;
+
+  const result = await pool.query(
+    `UPDATE importer_sku_mappings
+        SET sku = $1,
+            hts_code = $2,
+            description = $3,
+            duty_rate = $4,
+            updated_at = now()
+      WHERE id = $5 AND importer_id = $6
+      RETURNING id, importer_id, version, sku, hts_code, description, duty_rate, is_active, created_at, updated_at`,
+    [sku, htsCode, description ?? null, dutyRate ?? null, req.params.mappingId, importer.id]
+  );
+
+  if (!result.rowCount) {
+    res.status(404).json({ error: 'mapping entry not found' });
+    return;
+  }
+
+  await logAudit(user.id, 'sku_mapping_updated', importer.id, {
+    mappingId: req.params.mappingId,
+    sku,
+    htsCode,
+  });
+
+  res.json({ mapping: result.rows[0] });
+});
+
+importersRouter.delete('/:id/sku-mappings/:mappingId', async (req: Request, res: Response) => {
+  const user = (req as AuthedRequest).user;
+  const importer = await loadImporterFor(req, String(req.params.id ?? ''));
+  if (!importer) {
+    res.status(404).json({ error: 'not found' });
+    return;
+  }
+
+  const result = await pool.query(
+    'DELETE FROM importer_sku_mappings WHERE id = $1 AND importer_id = $2 RETURNING id, sku',
+    [req.params.mappingId, importer.id]
+  );
+
+  if (!result.rowCount) {
+    res.status(404).json({ error: 'mapping entry not found' });
+    return;
+  }
+
+  await logAudit(user.id, 'sku_mapping_deleted', importer.id, {
+    mappingId: req.params.mappingId,
+    sku: result.rows[0]?.sku,
+  });
+
+  res.json({ success: true });
+});
+
+// ── #1041: Consolidated Document Expiration Calendar View ────────────────────
+
+export interface ComplianceExpirationItem {
+  id: string;
+  entityType: 'kyc' | 'surety_license';
+  title: string;
+  documentType: string;
+  expirationDate: string;
+  daysUntilExpiration: number;
+  urgency: 'critical' | 'warning' | 'upcoming' | 'normal';
+  deepLink: string;
+  metadata?: Record<string, unknown>;
+}
+
+importersRouter.get('/:id/compliance-calendar', async (req: Request, res: Response) => {
+  const importer = await loadImporterFor(req, String(req.params.id ?? ''));
+  if (!importer) {
+    res.status(404).json({ error: 'not found' });
+    return;
+  }
+
+  const items: ComplianceExpirationItem[] = [];
+  const now = Date.now();
+
+  const kycDocs = await pool.query(
+    `SELECT id, document_type, document_name, upload_timestamp, expiration_date, scheduled_deletion_date, review_status
+       FROM kyc_documents
+      WHERE importer_id = $1 AND deleted_at IS NULL`,
+    [importer.id]
+  );
+
+  for (const doc of kycDocs.rows) {
+    const expiry = doc.expiration_date
+      ? new Date(doc.expiration_date)
+      : doc.upload_timestamp
+        ? new Date(new Date(doc.upload_timestamp).getTime() + 365 * 24 * 60 * 60 * 1000)
+        : null;
+
+    if (expiry) {
+      const daysUntil = Math.ceil((expiry.getTime() - now) / (1000 * 60 * 60 * 24));
+      let urgency: 'critical' | 'warning' | 'upcoming' | 'normal' = 'normal';
+      if (daysUntil <= 30) urgency = 'critical';
+      else if (daysUntil <= 60) urgency = 'warning';
+      else if (daysUntil <= 90) urgency = 'upcoming';
+
+      const docName = doc.document_name || doc.document_type.replace(/_/g, ' ').toUpperCase();
+      items.push({
+        id: doc.id,
+        entityType: 'kyc',
+        title: `KYC: ${docName}`,
+        documentType: doc.document_type,
+        expirationDate: expiry.toISOString(),
+        daysUntilExpiration: daysUntil,
+        urgency,
+        deepLink: `/app?tab=kyc`,
+        metadata: { reviewStatus: doc.review_status },
+      });
+    }
+  }
+
+  const suretyLicenses = await pool.query(
+    'SELECT id, state_code, license_number, expiration_date, status, renewal_url FROM surety_state_licenses'
+  );
+
+  for (const lic of suretyLicenses.rows) {
+    if (lic.expiration_date) {
+      const expiry = new Date(lic.expiration_date);
+      const daysUntil = Math.ceil((expiry.getTime() - now) / (1000 * 60 * 60 * 24));
+      let urgency: 'critical' | 'warning' | 'upcoming' | 'normal' = 'normal';
+      if (daysUntil <= 30) urgency = 'critical';
+      else if (daysUntil <= 60) urgency = 'warning';
+      else if (daysUntil <= 90) urgency = 'upcoming';
+
+      items.push({
+        id: lic.id,
+        entityType: 'surety_license',
+        title: `Surety License (${lic.state_code}): ${lic.license_number}`,
+        documentType: 'surety_state_license',
+        expirationDate: expiry.toISOString(),
+        daysUntilExpiration: daysUntil,
+        urgency,
+        deepLink: lic.renewal_url || '/surety-license/submit',
+        metadata: { status: lic.status, stateCode: lic.state_code },
+      });
+    }
+  }
+
+  items.sort((a, b) => new Date(a.expirationDate).getTime() - new Date(b.expirationDate).getTime());
+
+  res.json({ items });
 });
 
 // --- Surety admin actions ---
