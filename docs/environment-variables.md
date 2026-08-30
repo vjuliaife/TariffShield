@@ -1,8 +1,8 @@
 # Environment Variable Reference
 
-TariffShield is a monorepo. Each service (`apps/api`, `apps/web`) has its own `.env` file. Variables are **not** automatically shared between services — the API server and the Next.js frontend each read only their own environment.
+TariffShield is a monorepo. Each service (`apps/api`, `apps/web`) has its own environment file — the API reads `apps/api/.env` and the Next.js frontend reads `apps/web/.env.local`. Variables are **not** automatically shared between services — the API server and the Next.js frontend each read only their own environment.
 
-Copy the relevant `.env.example` file to `.env` in the same directory and fill in the values before starting each service.
+For local development, copy the relevant `.env.example` file to `.env` (API) or `.env.local` (web) in the same directory and fill in the values before starting each service. Next.js auto-loads `.env.local` on `npm run dev`/`npm run build` and it takes precedence over a plain `.env` (the onboarding paths `make setup-env`, `scripts/setup-env.ts`, and `docs/FAQ.md` all standardize on `apps/web/.env.local` for web-only overrides).
 
 ---
 
@@ -112,7 +112,9 @@ All DocuSign variables are optional. If not set, bond-signature endpoints operat
 
 ---
 
-## Web Service — `apps/web/.env`
+## Web Service — `apps/web/.env.local`
+
+Next.js loads `.env.local` for all environments. Use this file (not `apps/web/.env`) for local web overrides: it takes precedence over a plain `.env` and is what `make setup-env` / `scripts/setup-env.ts` write.
 
 | Variable | Required | Description | Example Value |
 |----------|----------|-------------|---------------|

@@ -1092,3 +1092,109 @@ fn benchmark_register_importer_scaling() {
         current_importers_count += 1;
     }
 }
+
+// #1127 — cost of a single `deposit_reserve` / `deposit_collateral` call after
+// a varying number of *prior* deposits, to check whether the per-call resource
+// cost grows with the importer's deposit history. Both functions load one
+// fixed-size `DataKey::Account` entry, do a single SAC transfer, and `+=` one
+// balance field before saving the same fixed-size entry — `collateral_history`
+// is only appended to by `set_required_collateral`, never by deposits — so the
+// measured cost is expected to be flat across prior-deposit counts.
+enum DepositKind {
+    Reserve,
+    Collateral,
+}
+
+fn deposit_cost_after_prior_deposits(kind: &DepositKind, prior: usize) -> (u64, u64) {
+    let s = setup();
+    s.client
+        .register_importer(&s.importer, &(900_000 + prior as u64), &1_000_000_0000000);
+
+    let deposit = |s: &Setup, amount: i128| match kind {
+        DepositKind::Reserve => s.client.deposit_reserve(&s.importer, &s.funder, &amount),
+        DepositKind::Collateral => s.client.deposit_collateral(&s.importer, &s.funder, &amount),
+    };
+
+    for _ in 0..prior {
+        deposit(&s, 500_0000); // 0.5 XLM each; 1000 priors = 500 XLM < funder's 1000 XLM
+    }
+
+    let mut budget = s.env.cost_estimate().budget();
+    budget.reset_unlimited();
+    budget.reset_tracker();
+    deposit(&s, 1_000_0000); // the measured (prior+1)-th call
+    (budget.cpu_instruction_cost(), budget.memory_bytes_cost())
+}
+
+// #1127 — isolates the *true* per-call cost from the cumulative test-env event
+// log. The env is set up with one real deposit (to create the token ledger
+// entries), then `prior` further deposits are simulated as plain Account-state
+// rewrites under the same `DataKey::Account(importer)` key (the exact final
+// state N sequential deposits would leave, minus the N published events). The
+// measured call then sees a ledger whose account has {1, 100, 1000} prior
+// deposit history with no host-side event accumulation.
+fn deposit_cost_isolated(kind: &DepositKind, prior: usize) -> (u64, u64) {
+    let s = setup();
+    s.client
+        .register_importer(&s.importer, &(800_000 + prior as u64), &1_000_000_0000000);
+
+    match kind {
+        DepositKind::Reserve => s.client.deposit_reserve(&s.importer, &s.funder, &1_000_0000),
+        DepositKind::Collateral => s.client.deposit_collateral(&s.importer, &s.funder, &1_000_0000),
+    }
+
+    const PER_DEPOSIT: i128 = 1_000_0000;
+    s.env.as_contract(&s.contract_id, || {
+        let key = DataKey::Account(s.importer.clone());
+        let mut acct: Account = s.env.storage().persistent().get(&key).unwrap();
+        let total = PER_DEPOSIT * (prior as i128 + 1);
+        match kind {
+            DepositKind::Reserve => acct.reserve_balance = total,
+            DepositKind::Collateral => acct.collateral_balance = total,
+        }
+        s.env.storage().persistent().set(&key, &acct);
+    });
+
+    let mut budget = s.env.cost_estimate().budget();
+    budget.reset_unlimited();
+    budget.reset_tracker();
+    match kind {
+        DepositKind::Reserve => s.client.deposit_reserve(&s.importer, &s.funder, &PER_DEPOSIT),
+        DepositKind::Collateral => s.client.deposit_collateral(&s.importer, &s.funder, &PER_DEPOSIT),
+    }
+    (budget.cpu_instruction_cost(), budget.memory_bytes_cost())
+}
+
+#[test]
+fn benchmark_deposit_cost_vs_prior_deposit_count() {
+    for kind in [DepositKind::Reserve, DepositKind::Collateral] {
+        for prior in [1usize, 100, 1000] {
+            let (cpu, mem) = deposit_cost_after_prior_deposits(&kind, prior);
+            std::println!(
+                "DEPOSIT_BENCHMARK: kind={}, prior_deposits={}, cpu={}, mem={}",
+                match kind {
+                    DepositKind::Reserve => "reserve",
+                    DepositKind::Collateral => "collateral",
+                },
+                prior,
+                cpu,
+                mem
+            );
+        }
+    }
+    for kind in [DepositKind::Reserve, DepositKind::Collateral] {
+        for prior in [1usize, 100, 1000] {
+            let (cpu, mem) = deposit_cost_isolated(&kind, prior);
+            std::println!(
+                "DEPOSIT_BENCHMARK_ISOLATED: kind={}, prior_deposits={}, cpu={}, mem={}",
+                match kind {
+                    DepositKind::Reserve => "reserve",
+                    DepositKind::Collateral => "collateral",
+                },
+                prior,
+                cpu,
+                mem
+            );
+        }
+    }
+}

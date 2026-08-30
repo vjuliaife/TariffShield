@@ -85,6 +85,24 @@ To verify your local environment is fully operational:
 4. Complete the **Importer registration** flow.
 5. Validate the health endpoint shows `db: "connected"` and `soroban: "ok"`.
 
+### Shortfall demo (`--shortfall`)
+
+The seed script (#1140) can pre-stamp one demo importer in the shortfall
+scenario the README "Verification flow" describes:
+
+```bash
+npm run seed -- --shortfall
+npm run admin -- auto-top-up --importer-id <id printed by the seeder>
+```
+
+`demo-importer-shortfall@example.com` ships with the deposits (30 XLM
+collateral + 100 XLM reserve) and the tariff upload that drives required
+collateral to 80 XLM, so `auto-top-up` deterministically reports a 50 XLM
+move (reserve → collateral), matching the documented flow. The admin command
+derives the numbers from `contract_events`/`tariff_uploads` when the importer
+is a DB-only demo (dry-run), and from the live on-chain account — submitting
+with `--execute` — once the importer is really registered and funded.
+
 ## Common Issues
 
 - **Port Conflicts**: If port 3002 or 5432 is already in use, update the respective `.env` or `docker-compose.yml` configuration.
