@@ -8,6 +8,7 @@ import {
   tosReacceptanceGate,
   type AuthedRequest,
 } from '../auth.js';
+import { getReportTemplate } from './report-templates.js';
 
 export const complianceRouter = Router();
 complianceRouter.use(authMiddleware);
@@ -449,5 +450,9 @@ complianceRouter.get('/reports/:id/download', async (req: Request, res: Response
   const key: string = reportRow.pdf_s3_key;
   // In production, generate a pre-signed S3 GetObject URL here.
   const url = `/dev/reports/${key}`;
-  res.json({ url, expiresInSeconds: 900 });
+  // #1032: the tenant's branded export template — the PDF renderer applies
+  // logo/header/footer from this when generating the file at `key`; it does
+  // not change the underlying report data the PDF is built from.
+  const reportTemplate = await getReportTemplate(user.id);
+  res.json({ url, expiresInSeconds: 900, reportTemplate });
 });

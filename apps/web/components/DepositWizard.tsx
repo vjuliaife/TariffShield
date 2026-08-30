@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { api } from '@/lib/api';
 import { formatApiError, type FormattedError } from '@/lib/error-formatter';
+import { DepositWizardTour, useDepositWizardTour } from './DepositWizardTour';
 
 type Step = 'amount' | 'preview' | 'confirm' | 'receipt';
 
@@ -23,6 +24,7 @@ export function DepositWizard({
   const [xlm, setXlm] = useState('50');
   const [txHash, setTxHash] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const tour = useDepositWizardTour();
 
   function resetWizard() {
     setStep('amount');
@@ -55,6 +57,19 @@ export function DepositWizard({
 
   return (
     <div className="space-y-4">
+      <div className="flex items-center justify-end -mb-2">
+        <button
+          type="button"
+          onClick={tour.launch}
+          aria-label="Show guided tour for this form"
+          title="Show guided tour"
+          className="inline-flex items-center justify-center text-muted hover:text-foreground text-xs rounded-full w-4 h-4 border border-muted/40 hover:border-foreground"
+        >
+          ?
+        </button>
+      </div>
+      {tour.active && <DepositWizardTour onClose={tour.close} />}
+
       {step === 'amount' && (
         <>
           <div className="flex gap-2">
