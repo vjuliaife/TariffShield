@@ -39,6 +39,8 @@ import { onboardingRouter } from './routes/onboarding.js';
 import { apiKeyUsageMeter } from './services/api-key-usage.js';
 import { startApiKeyUsagePruneScheduler } from './jobs/prune-api-key-usage.js';
 import { startOnboardingDripScheduler } from './services/onboarding-drip.js';
+import { suretyMarketplaceRouter, adminMarketplaceRouter } from './routes/surety-marketplace.js';
+import { startComplianceEscalation } from './jobs/compliance-escalation.js';
 
 const app = express();
 app.use(httpLogger);
@@ -339,6 +341,8 @@ app.use('/onboarding', onboardingRouter);
 app.use('/api/v1/regulatory', regulatoryRouter);
 app.use('/bonds', bondWebhookRouter); // unauthenticated DocuSign webhook
 app.use('/api', bondSignaturesRouter); // authenticated bond signature routes
+app.use('/surety-marketplace', suretyMarketplaceRouter);
+app.use('/surety-marketplace', adminMarketplaceRouter);
 
 Sentry.setupExpressErrorHandler(app);
 
@@ -365,6 +369,7 @@ async function start() {
   startSlaBreachChecker();
   startApiKeyUsagePruneScheduler();
   startOnboardingDripScheduler();
+  startComplianceEscalation();
   app.listen(env.PORT, () => {
     logger.info(
       {

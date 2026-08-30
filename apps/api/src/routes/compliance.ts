@@ -194,7 +194,16 @@ complianceRouter.get('/flags', async (req: Request, res: Response) => {
     return;
   }
 
-  const { resolution_status, severity, importer_id, assigned_to, case_status, priority, limit, offset } = query.data;
+  const {
+    resolution_status,
+    severity,
+    importer_id,
+    assigned_to,
+    case_status,
+    priority,
+    limit,
+    offset,
+  } = query.data;
   const conditions: string[] = ['cf.surety_id = $1'];
   const params: unknown[] = [user.id];
   let idx = 2;
@@ -329,10 +338,12 @@ complianceRouter.post('/flags/:id/assign', async (req: Request, res: Response) =
 complianceRouter.post('/flags/:id/status', async (req: Request, res: Response) => {
   const user = (req as AuthedRequest).user;
 
-  const parse = z.object({ 
-    case_status: z.enum(['new', 'investigating', 'escalated', 'resolved']),
-    priority: z.enum(['low', 'medium', 'high', 'critical']).optional(),
-  }).safeParse(req.body);
+  const parse = z
+    .object({
+      case_status: z.enum(['new', 'investigating', 'escalated', 'resolved']),
+      priority: z.enum(['low', 'medium', 'high', 'critical']).optional(),
+    })
+    .safeParse(req.body);
   if (!parse.success) {
     res.status(400).json({ error: 'invalid input' });
     return;
@@ -357,10 +368,7 @@ complianceRouter.post('/flags/:id/status', async (req: Request, res: Response) =
   }
 
   params.push(req.params.id);
-  await pool.query(
-    `UPDATE compliance_flags SET ${updates.join(', ')} WHERE id = $${idx}`,
-    params
-  );
+  await pool.query(`UPDATE compliance_flags SET ${updates.join(', ')} WHERE id = $${idx}`, params);
 
   res.json({ success: true });
 });
@@ -450,4 +458,168 @@ complianceRouter.get('/reports/:id/download', async (req: Request, res: Response
   // In production, generate a pre-signed S3 GetObject URL here.
   const url = `/dev/reports/${key}`;
   res.json({ url, expiresInSeconds: 900 });
+});
+
+// GET /api/v1/compliance/escalation-rules — list escalation rules
+complianceRouter.get('/escalation-rules', async (req: Request, res: Response) => {
+  const user = (req as AuthedRequest).user;
+
+  const rules = await pool.query(
+    `SELECT id, surety_id, age_threshold_hours, escalation_target_role,
+            escalation_target_user_id, is_active, created_at, updated_at
+     FROM compliance_escalation_rules
+     WHERE surety_id = $1
+     ORDER BY age_threshold_hours ASC`,
+    [user.id]
+  );
+
+  res.json({ rules: rules.rows });
+});
+
+// POST /api/v1/compliance/escalation-rules — create escalation rule
+complianceRouter.post('/escalation-rules', async (req: Request, res: Response) => {
+  const user = (req as AuthedRequest).user;
+
+  const parse = z
+    .object({
+      age_threshold_hours: z.number().int().positive().max(720), // max 30 days
+      escalation_target_role: z.enum(['senior_admin', 'specific_user']),
+      escalation_target_user_id: z.string().uuid().optional(),
+    })
+    .safeParse(req.body);
+
+  if (!parse.success) {
+    res.status(400).json({ error: 'invalid input', details: parse.error });
+    return;
+  }
+
+  const { age_threshold_hours, escalation_target_role, escalation_target_user_id } = parse.data;
+
+  // Validate specific_user requires escalation_target_user_id
+  if (escalation_target_role === 'specific_user' && !escalation_target_user_id) {
+    res.status(400).json({ error: 'escalation_target_user_id required for specific_user role' });
+    return;
+  }
+
+  const result = await pool.query(
+    `INSERT INTO compliance_escalation_rules
+       (surety_id, age_threshold_hours, escalation_target_role, escalation_target_user_id, is_active)
+     VALUES ($1, $2, $3, $4, TRUE)
+     RETURNING id, surety_id, age_threshold_hours, escalation_target_role,
+               escalation_target_user_id, is_active, created_at, updated_at`,
+    [user.id, age_threshold_hours, escalation_target_role, escalation_target_user_id ?? null]
+  );
+
+  res.status(201).json({ rule: result.rows[0] });
+});
+
+// PUT /api/v1/compliance/escalation-rules/:id — update escalation rule
+complianceRouter.put('/escalation-rules/:id', async (req: Request, res: Response) => {
+  const user = (req as AuthedRequest).user;
+
+  const parse = z
+    .object({
+      age_threshold_hours: z.number().int().positive().max(720).optional(),
+      escalation_target_role: z.enum(['senior_admin', 'specific_user']).optional(),
+      escalation_target_user_id: z.string().uuid().optional().nullable(),
+      is_active: z.boolean().optional(),
+    })
+    .safeParse(req.body);
+
+  if (!parse.success) {
+    res.status(400).json({ error: 'invalid input', details: parse.error });
+    return;
+  }
+
+  // Check rule exists and belongs to this surety
+  const existing = await pool.query(
+    `SELECT id FROM compliance_escalation_rules WHERE id = $1 AND surety_id = $2`,
+    [req.params.id, user.id]
+  );
+
+  if (!existing.rowCount) {
+    res.status(404).json({ error: 'escalation rule not found' });
+    return;
+  }
+
+  const updates: string[] = ['updated_at = now()'];
+  const params: unknown[] = [];
+  let idx = 1;
+
+  if (parse.data.age_threshold_hours !== undefined) {
+    updates.push(`age_threshold_hours = $${idx++}`);
+    params.push(parse.data.age_threshold_hours);
+  }
+  if (parse.data.escalation_target_role !== undefined) {
+    updates.push(`escalation_target_role = $${idx++}`);
+    params.push(parse.data.escalation_target_role);
+  }
+  if (parse.data.escalation_target_user_id !== undefined) {
+    updates.push(`escalation_target_user_id = $${idx++}`);
+    params.push(parse.data.escalation_target_user_id);
+  }
+  if (parse.data.is_active !== undefined) {
+    updates.push(`is_active = $${idx++}`);
+    params.push(parse.data.is_active);
+  }
+
+  params.push(req.params.id);
+  const result = await pool.query(
+    `UPDATE compliance_escalation_rules
+     SET ${updates.join(', ')}
+     WHERE id = $${idx}
+     RETURNING id, surety_id, age_threshold_hours, escalation_target_role,
+               escalation_target_user_id, is_active, created_at, updated_at`,
+    params
+  );
+
+  res.json({ rule: result.rows[0] });
+});
+
+// DELETE /api/v1/compliance/escalation-rules/:id — delete escalation rule
+complianceRouter.delete('/escalation-rules/:id', async (req: Request, res: Response) => {
+  const user = (req as AuthedRequest).user;
+
+  const result = await pool.query(
+    `DELETE FROM compliance_escalation_rules
+     WHERE id = $1 AND surety_id = $2
+     RETURNING id`,
+    [req.params.id, user.id]
+  );
+
+  if (!result.rowCount) {
+    res.status(404).json({ error: 'escalation rule not found' });
+    return;
+  }
+
+  res.json({ success: true });
+});
+
+// GET /api/v1/compliance/escalation-history/:flagId — get escalation history for a flag
+complianceRouter.get('/escalation-history/:flagId', async (req: Request, res: Response) => {
+  const user = (req as AuthedRequest).user;
+
+  // Verify flag belongs to this surety
+  const flag = await pool.query(
+    `SELECT id FROM compliance_flags WHERE id = $1 AND surety_id = $2`,
+    [req.params.flagId, user.id]
+  );
+
+  if (!flag.rowCount) {
+    res.status(404).json({ error: 'flag not found' });
+    return;
+  }
+
+  const history = await pool.query(
+    `SELECT eh.id, eh.flag_id, eh.escalation_rule_id, eh.previous_assignee,
+            eh.new_assignee, eh.escalated_at,
+            er.age_threshold_hours
+     FROM compliance_escalation_history eh
+     JOIN compliance_escalation_rules er ON er.id = eh.escalation_rule_id
+     WHERE eh.flag_id = $1
+     ORDER BY eh.escalated_at DESC`,
+    [req.params.flagId]
+  );
+
+  res.json({ history: history.rows });
 });
