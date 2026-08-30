@@ -181,6 +181,9 @@ complianceRouter.get('/flags', async (req: Request, res: Response) => {
       resolution_status: z.enum(['open', 'resolved']).optional(),
       severity: z.enum(['low', 'medium', 'high', 'critical']).optional(),
       importer_id: z.string().uuid().optional(),
+      assigned_to: z.string().uuid().optional(),
+      case_status: z.enum(['new', 'investigating', 'escalated', 'resolved']).optional(),
+      priority: z.enum(['low', 'medium', 'high', 'critical']).optional(),
       limit: z.coerce.number().int().positive().max(100).default(50),
       offset: z.coerce.number().int().min(0).default(0),
     })
@@ -191,7 +194,7 @@ complianceRouter.get('/flags', async (req: Request, res: Response) => {
     return;
   }
 
-  const { resolution_status, severity, importer_id, limit, offset } = query.data;
+  const { resolution_status, severity, importer_id, assigned_to, case_status, priority, limit, offset } = query.data;
   const conditions: string[] = ['cf.surety_id = $1'];
   const params: unknown[] = [user.id];
   let idx = 2;
@@ -208,6 +211,18 @@ complianceRouter.get('/flags', async (req: Request, res: Response) => {
     conditions.push(`cf.importer_id = $${idx++}`);
     params.push(importer_id);
   }
+  if (assigned_to) {
+    conditions.push(`cf.assigned_to = $${idx++}`);
+    params.push(assigned_to);
+  }
+  if (case_status) {
+    conditions.push(`cf.case_status = $${idx++}`);
+    params.push(case_status);
+  }
+  if (priority) {
+    conditions.push(`cf.priority = $${idx++}`);
+    params.push(priority);
+  }
 
   const where = conditions.join(' AND ');
 
@@ -215,11 +230,15 @@ complianceRouter.get('/flags', async (req: Request, res: Response) => {
     pool.query(
       `SELECT cf.id, cf.importer_id, i.legal_name AS importer_name,
               cf.flag_type, cf.severity, cf.description,
-              cf.resolution_status, cf.resolution_note, cf.resolved_at, cf.created_at
+              cf.resolution_status, cf.resolution_note, cf.resolved_at, cf.created_at,
+              cf.assigned_to, cf.priority, cf.case_status,
+              EXTRACT(EPOCH FROM (now() - cf.created_at)) / 3600 AS age_hours
        FROM compliance_flags cf
        JOIN importers i ON i.id = cf.importer_id
        WHERE ${where}
-       ORDER BY cf.created_at DESC
+       ORDER BY 
+         CASE cf.priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
+         cf.created_at DESC
        LIMIT $${idx} OFFSET $${idx + 1}`,
       [...params, limit, offset]
     ),
@@ -229,8 +248,15 @@ complianceRouter.get('/flags', async (req: Request, res: Response) => {
     ),
   ]);
 
+  // SLA indicator: flag cases open beyond 72 hours (3 days)
+  const slaThresholdHours = 72;
+  const flagsWithSla = flags.rows.map((flag) => ({
+    ...flag,
+    slaBreached: Number(flag.age_hours) > slaThresholdHours,
+  }));
+
   res.json({
-    flags: flags.rows,
+    flags: flagsWithSla,
     total: parseInt(total.rows[0]?.cnt ?? '0', 10),
     limit,
     offset,
@@ -268,6 +294,128 @@ complianceRouter.post('/flags/:id/resolve', async (req: Request, res: Response) 
   dashboardCache.delete(`dashboard:${user.id}`);
 
   res.json({ success: true });
+});
+
+// POST /api/v1/compliance/flags/:id/assign — assign a flag to an admin user
+complianceRouter.post('/flags/:id/assign', async (req: Request, res: Response) => {
+  const user = (req as AuthedRequest).user;
+
+  const parse = z.object({ assigned_to: z.string().uuid() }).safeParse(req.body);
+  if (!parse.success) {
+    res.status(400).json({ error: 'assigned_to is required' });
+    return;
+  }
+
+  const flag = await pool.query(
+    `SELECT id FROM compliance_flags WHERE id = $1 AND surety_id = $2`,
+    [req.params.id, user.id]
+  );
+  if (!flag.rowCount) {
+    res.status(404).json({ error: 'flag not found' });
+    return;
+  }
+
+  await pool.query(
+    `UPDATE compliance_flags
+     SET assigned_to = $1, case_status = 'investigating', updated_at = now()
+     WHERE id = $2`,
+    [parse.data.assigned_to, req.params.id]
+  );
+
+  res.json({ success: true });
+});
+
+// POST /api/v1/compliance/flags/:id/status — update case status
+complianceRouter.post('/flags/:id/status', async (req: Request, res: Response) => {
+  const user = (req as AuthedRequest).user;
+
+  const parse = z.object({ 
+    case_status: z.enum(['new', 'investigating', 'escalated', 'resolved']),
+    priority: z.enum(['low', 'medium', 'high', 'critical']).optional(),
+  }).safeParse(req.body);
+  if (!parse.success) {
+    res.status(400).json({ error: 'invalid input' });
+    return;
+  }
+
+  const flag = await pool.query(
+    `SELECT id FROM compliance_flags WHERE id = $1 AND surety_id = $2`,
+    [req.params.id, user.id]
+  );
+  if (!flag.rowCount) {
+    res.status(404).json({ error: 'flag not found' });
+    return;
+  }
+
+  const updates = ['case_status = $1', 'updated_at = now()'];
+  const params: unknown[] = [parse.data.case_status];
+  let idx = 2;
+
+  if (parse.data.priority) {
+    updates.push(`priority = $${idx++}`);
+    params.push(parse.data.priority);
+  }
+
+  params.push(req.params.id);
+  await pool.query(
+    `UPDATE compliance_flags SET ${updates.join(', ')} WHERE id = $${idx}`,
+    params
+  );
+
+  res.json({ success: true });
+});
+
+// POST /api/v1/compliance/flags/:id/notes — add a case note
+complianceRouter.post('/flags/:id/notes', async (req: Request, res: Response) => {
+  const user = (req as AuthedRequest).user;
+
+  const parse = z.object({ content: z.string().min(1) }).safeParse(req.body);
+  if (!parse.success) {
+    res.status(400).json({ error: 'content is required' });
+    return;
+  }
+
+  const flag = await pool.query(
+    `SELECT id FROM compliance_flags WHERE id = $1 AND surety_id = $2`,
+    [req.params.id, user.id]
+  );
+  if (!flag.rowCount) {
+    res.status(404).json({ error: 'flag not found' });
+    return;
+  }
+
+  const result = await pool.query(
+    `INSERT INTO compliance_case_notes (flag_id, author_id, content)
+     VALUES ($1, $2, $3)
+     RETURNING id, flag_id, author_id, content, created_at`,
+    [req.params.id, user.id, parse.data.content]
+  );
+
+  res.status(201).json({ note: result.rows[0] });
+});
+
+// GET /api/v1/compliance/flags/:id/notes — list case notes
+complianceRouter.get('/flags/:id/notes', async (req: Request, res: Response) => {
+  const user = (req as AuthedRequest).user;
+
+  const flag = await pool.query(
+    `SELECT id FROM compliance_flags WHERE id = $1 AND surety_id = $2`,
+    [req.params.id, user.id]
+  );
+  if (!flag.rowCount) {
+    res.status(404).json({ error: 'flag not found' });
+    return;
+  }
+
+  const result = await pool.query(
+    `SELECT id, flag_id, author_id, content, created_at
+     FROM compliance_case_notes
+     WHERE flag_id = $1
+     ORDER BY created_at DESC`,
+    [req.params.id]
+  );
+
+  res.json({ notes: result.rows });
 });
 
 // GET /api/v1/compliance/reports — list available compliance reports for this surety
