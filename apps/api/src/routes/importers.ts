@@ -1953,6 +1953,195 @@ importersRouter.get('/:id/documents', async (req: Request, res: Response) => {
   res.json({ documents });
 });
 
+// ── #1028: Multi-bond portfolio view ──────────────────────────────────────
+
+importersRouter.get('/:id/portfolio', async (req: Request, res: Response) => {
+  const importer = await loadImporterFor(req, String(req.params.id ?? ''));
+  if (!importer) {
+    res.status(404).json({ error: 'not found' });
+    return;
+  }
+
+  // Get all bonds for this importer
+  const bondsResult = await pool.query(
+    `SELECT id, bond_number, policy_type, coverage_amount, status,
+            issued_at, expires_at, replaced_by_id, stellar_contract_address, created_at
+       FROM bonds WHERE importer_id = $1 ORDER BY created_at DESC`,
+    [importer.id]
+  );
+
+  const bonds = bondsResult.rows;
+  
+  // Aggregate totals
+  const totalCoverage = bonds.reduce((sum, bond) => sum + Number(bond.coverage_amount || 0), 0);
+  const activeBonds = bonds.filter(bond => bond.status === 'active');
+  const totalActiveCoverage = activeBonds.reduce((sum, bond) => sum + Number(bond.coverage_amount || 0), 0);
+  
+  // Upcoming renewals (within 90 days)
+  const now = new Date();
+  const ninetyDaysFromNow = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000);
+  const upcomingRenewals = bonds.filter(bond => {
+    if (!bond.expires_at) return false;
+    const expiresAt = new Date(bond.expires_at);
+    return expiresAt >= now && expiresAt <= ninetyDaysFromNow;
+  });
+
+  // Get collateral status from on-chain
+  let collateralStatus;
+  try {
+    const acct = await contractClient.getAccount(importer.stellar_address);
+    collateralStatus = {
+      collateralBalance: acct.collateralBalance.toString(),
+      requiredCollateral: acct.requiredCollateral.toString(),
+      reserveBalance: acct.reserveBalance.toString(),
+      yieldAccrued: acct.yieldAccrued.toString(),
+    };
+  } catch (err) {
+    collateralStatus = null;
+  }
+
+  // Sort options
+  const sortBy = String(req.query.sort_by || 'created_at');
+  const sortOrder = String(req.query.sort_order || 'desc');
+  
+  let sortedBonds = [...bonds];
+  if (sortBy === 'expires_at') {
+    sortedBonds.sort((a, b) => {
+      const dateA = a.expires_at ? new Date(a.expires_at).getTime() : 0;
+      const dateB = b.expires_at ? new Date(b.expires_at).getTime() : 0;
+      return sortOrder === 'asc' ? dateA - dateB : dateB - dateA;
+    });
+  } else if (sortBy === 'coverage_amount') {
+    sortedBonds.sort((a, b) => {
+      const amountA = Number(a.coverage_amount || 0);
+      const amountB = Number(b.coverage_amount || 0);
+      return sortOrder === 'asc' ? amountA - amountB : amountB - amountA;
+    });
+  } else if (sortBy === 'status') {
+    sortedBonds.sort((a, b) => {
+      const statusOrder = { active: 0, pending: 1, expired: 2, replaced: 3 };
+      const orderA = statusOrder[a.status as keyof typeof statusOrder] ?? 4;
+      const orderB = statusOrder[b.status as keyof typeof statusOrder] ?? 4;
+      return sortOrder === 'asc' ? orderA - orderB : orderB - orderA;
+    });
+  }
+
+  // Filter by status if provided
+  const statusFilter = String(req.query.status || '');
+  if (statusFilter) {
+    sortedBonds = sortedBonds.filter(bond => bond.status === statusFilter);
+  }
+
+  res.json({
+    importer: {
+      id: importer.id,
+      legalName: importer.legal_name,
+      bondId: importer.bond_id,
+    },
+    portfolio: {
+      totalBonds: bonds.length,
+      activeBonds: activeBonds.length,
+      totalCoverage,
+      totalActiveCoverage,
+      upcomingRenewalsCount: upcomingRenewals.length,
+      upcomingRenewals: upcomingRenewals.map(bond => ({
+        id: bond.id,
+        bondNumber: bond.bond_number,
+        expiresAt: bond.expires_at,
+        coverageAmount: bond.coverage_amount,
+      })),
+    },
+    collateralStatus,
+    bonds: sortedBonds,
+  });
+});
+
+// ── #1030: Tariff exposure forecasting ────────────────────────────────────
+
+importersRouter.get('/:id/forecast', async (req: Request, res: Response) => {
+  const importer = await loadImporterFor(req, String(req.params.id ?? ''));
+  if (!importer) {
+    res.status(404).json({ error: 'not found' });
+    return;
+  }
+
+  // Get historical tariff uploads
+  const uploadsResult = await pool.query(
+    `SELECT id, annual_duty_total, computed_required_collateral, created_at
+       FROM tariff_uploads
+       WHERE importer_id = $1
+       ORDER BY created_at ASC`,
+    [importer.id]
+  );
+
+  const uploads = uploadsResult.rows;
+  
+  if (uploads.length < 2) {
+    res.json({
+      forecast: null,
+      message: 'Insufficient upload history for forecasting (need at least 2 uploads)',
+      historicalData: uploads.map(u => ({
+        date: u.created_at,
+        annualDutyTotal: u.annual_duty_total,
+        requiredCollateral: u.computed_required_collateral,
+      })),
+    });
+    return;
+  }
+
+  // Calculate linear trend
+  const n = uploads.length;
+  const xValues = uploads.map((_, i) => i);
+  const yValues = uploads.map(u => Number(u.annual_duty_total));
+  
+  const sumX = xValues.reduce((a, b) => a + b, 0);
+  const sumY = yValues.reduce((a, b) => a + b, 0);
+  const sumXY = xValues.reduce((sum, x, i) => sum + x * (yValues[i] ?? 0), 0);
+  const sumX2 = xValues.reduce((sum, x) => sum + x * x, 0);
+  
+  const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+  const intercept = (sumY - slope * sumX) / n;
+  
+  // Project 30, 60, 90 days out (assuming monthly uploads)
+  const lastX = n - 1;
+  const firstUpload = uploads[0];
+  const lastUpload = uploads[n - 1];
+  const monthsPerUpload = uploads.length > 1 && firstUpload && lastUpload ? 
+    (new Date(lastUpload.created_at).getTime() - new Date(firstUpload.created_at).getTime()) / (n - 1) / (30 * 24 * 60 * 60 * 1000) : 1;
+  
+  const forecastPoints = [30, 60, 90].map(days => {
+    const monthsOut = days / 30;
+    const futureX = lastX + monthsOut / monthsPerUpload;
+    const projectedDuty = slope * futureX + intercept;
+    const projectedCollateral = projectedDuty * 0.1 * 0.5; // Same formula as upload handler
+    return {
+      daysOut: days,
+      projectedAnnualDutyTotal: Math.max(0, projectedDuty),
+      projectedRequiredCollateral: Math.max(0, projectedCollateral),
+      isProjection: true,
+    };
+  });
+
+  // Historical data for chart
+  const historicalData = uploads.map(u => ({
+    date: u.created_at,
+    annualDutyTotal: Number(u.annual_duty_total),
+    requiredCollateral: Number(u.computed_required_collateral),
+    isProjection: false,
+  }));
+
+  res.json({
+    forecast: {
+      trend: slope > 0 ? 'increasing' : slope < 0 ? 'decreasing' : 'stable',
+      slope,
+      intercept,
+      projections: forecastPoints,
+    },
+    historicalData,
+    disclaimer: 'This forecast is a non-binding projection based on historical trends and should not be used as financial advice.',
+  });
+});
+
 // DELETE /importers/:id/documents/:docId — surety_admin only
 importersRouter.delete('/:id/documents/:docId', async (req: Request, res: Response) => {
   const user = (req as AuthedRequest).user;
