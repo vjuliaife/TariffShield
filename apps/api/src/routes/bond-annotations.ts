@@ -3,7 +3,6 @@ import { z } from 'zod';
 import { pool } from '../db.js';
 import {
   authMiddleware,
-  requireRole,
   privacyReacceptanceGate,
   tosReacceptanceGate,
   type AuthedRequest,
@@ -43,10 +42,10 @@ bondAnnotationsRouter.post('/', async (req: Request, res: Response) => {
 
   // For importers, verify they own the importer record
   if (isImporter) {
-    const importer = await pool.query(
-      `SELECT id FROM importers WHERE id = $1 AND user_id = $2`,
-      [importer_id, user.id]
-    );
+    const importer = await pool.query(`SELECT id FROM importers WHERE id = $1 AND user_id = $2`, [
+      importer_id,
+      user.id,
+    ]);
     if (!importer.rowCount) {
       res.status(403).json({ error: 'unauthorized' });
       return;
@@ -54,10 +53,9 @@ bondAnnotationsRouter.post('/', async (req: Request, res: Response) => {
   }
 
   // Get surety_id from the importer
-  const importerResult = await pool.query(
-    `SELECT surety_id FROM importers WHERE id = $1`,
-    [importer_id]
-  );
+  const importerResult = await pool.query(`SELECT surety_id FROM importers WHERE id = $1`, [
+    importer_id,
+  ]);
   const suretyId = importerResult.rows[0]?.surety_id;
   if (!suretyId) {
     res.status(404).json({ error: 'importer not found' });
@@ -91,10 +89,10 @@ bondAnnotationsRouter.get('/:importerId', async (req: Request, res: Response) =>
   }
 
   if (isImporter) {
-    const importer = await pool.query(
-      `SELECT id FROM importers WHERE id = $1 AND user_id = $2`,
-      [importerId, user.id]
-    );
+    const importer = await pool.query(`SELECT id FROM importers WHERE id = $1 AND user_id = $2`, [
+      importerId,
+      user.id,
+    ]);
     if (!importer.rowCount) {
       res.status(403).json({ error: 'unauthorized' });
       return;
@@ -114,7 +112,6 @@ bondAnnotationsRouter.get('/:importerId', async (req: Request, res: Response) =>
 
 // GET /bond-annotations/event/:eventId — list annotations for a specific event
 bondAnnotationsRouter.get('/event/:eventId', async (req: Request, res: Response) => {
-  const user = (req as AuthedRequest).user;
   const eventId = String(req.params.eventId);
 
   const result = await pool.query(
@@ -151,7 +148,7 @@ bondAnnotationsRouter.patch('/:id', async (req: Request, res: Response) => {
     return;
   }
 
-  const annotation = existing.rows[0];
+  const annotation = existing.rows[0]!;
   const isAuthor = annotation.author_id === user.id;
   const isAdmin = user.role === 'surety_admin';
 
@@ -165,7 +162,7 @@ bondAnnotationsRouter.patch('/:id', async (req: Request, res: Response) => {
      SET note = $1, updated_at = now()
      WHERE id = $2
      RETURNING id, event_id, importer_id, author_id, author_role, note, created_at, updated_at`,
-    [parse.data.note, annotationId]
+    [parse.data.note.trim(), annotationId]
   );
 
   res.json({ annotation: result.rows[0] });
@@ -186,7 +183,7 @@ bondAnnotationsRouter.delete('/:id', async (req: Request, res: Response) => {
     return;
   }
 
-  const annotation = existing.rows[0];
+  const annotation = existing.rows[0]!;
   const isAuthor = annotation.author_id === user.id;
   const isAdmin = user.role === 'surety_admin';
 

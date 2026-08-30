@@ -3,7 +3,6 @@ import { z } from 'zod';
 import { pool } from '../db.js';
 import {
   authMiddleware,
-  requireRole,
   privacyReacceptanceGate,
   tosReacceptanceGate,
   type AuthedRequest,

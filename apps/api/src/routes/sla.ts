@@ -55,10 +55,9 @@ slaRouter.post('/business-hours', async (req: Request, res: Response) => {
   const data = parse.data;
   const suretyId = user.id;
 
-  const existing = await pool.query(
-    `SELECT id FROM business_hours_config WHERE surety_id = $1`,
-    [suretyId]
-  );
+  const existing = await pool.query(`SELECT id FROM business_hours_config WHERE surety_id = $1`, [
+    suretyId,
+  ]);
 
   if (existing.rowCount) {
     await pool.query(
@@ -75,13 +74,20 @@ slaRouter.post('/business-hours', async (req: Request, res: Response) => {
        WHERE surety_id = $17`,
       [
         data.timezone,
-        data.monday_start, data.monday_end,
-        data.tuesday_start, data.tuesday_end,
-        data.wednesday_start, data.wednesday_end,
-        data.thursday_start, data.thursday_end,
-        data.friday_start, data.friday_end,
-        data.saturday_start, data.saturday_end,
-        data.sunday_start, data.sunday_end,
+        data.monday_start,
+        data.monday_end,
+        data.tuesday_start,
+        data.tuesday_end,
+        data.wednesday_start,
+        data.wednesday_end,
+        data.thursday_start,
+        data.thursday_end,
+        data.friday_start,
+        data.friday_end,
+        data.saturday_start,
+        data.saturday_end,
+        data.sunday_start,
+        data.sunday_end,
         JSON.stringify(data.holidays),
         suretyId,
       ]
@@ -96,14 +102,22 @@ slaRouter.post('/business-hours', async (req: Request, res: Response) => {
         sunday_start, sunday_end, holidays)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
       [
-        suretyId, data.timezone,
-        data.monday_start, data.monday_end,
-        data.tuesday_start, data.tuesday_end,
-        data.wednesday_start, data.wednesday_end,
-        data.thursday_start, data.thursday_end,
-        data.friday_start, data.friday_end,
-        data.saturday_start, data.saturday_end,
-        data.sunday_start, data.sunday_end,
+        suretyId,
+        data.timezone,
+        data.monday_start,
+        data.monday_end,
+        data.tuesday_start,
+        data.tuesday_end,
+        data.wednesday_start,
+        data.wednesday_end,
+        data.thursday_start,
+        data.thursday_end,
+        data.friday_start,
+        data.friday_end,
+        data.saturday_start,
+        data.saturday_end,
+        data.sunday_start,
+        data.sunday_end,
         JSON.stringify(data.holidays),
       ]
     );
@@ -116,21 +130,27 @@ slaRouter.post('/business-hours', async (req: Request, res: Response) => {
 slaRouter.get('/business-hours', async (req: Request, res: Response) => {
   const user = (req as AuthedRequest).user;
 
-  const result = await pool.query(
-    `SELECT * FROM business_hours_config WHERE surety_id = $1`,
-    [user.id]
-  );
+  const result = await pool.query(`SELECT * FROM business_hours_config WHERE surety_id = $1`, [
+    user.id,
+  ]);
 
   if (!result.rowCount) {
     res.json({
       timezone: 'America/New_York',
-      monday_start: '09:00', monday_end: '17:00',
-      tuesday_start: '09:00', tuesday_end: '17:00',
-      wednesday_start: '09:00', wednesday_end: '17:00',
-      thursday_start: '09:00', thursday_end: '17:00',
-      friday_start: '09:00', friday_end: '17:00',
-      saturday_start: null, saturday_end: null,
-      sunday_start: null, sunday_end: null,
+      monday_start: '09:00',
+      monday_end: '17:00',
+      tuesday_start: '09:00',
+      tuesday_end: '17:00',
+      wednesday_start: '09:00',
+      wednesday_end: '17:00',
+      thursday_start: '09:00',
+      thursday_end: '17:00',
+      friday_start: '09:00',
+      friday_end: '17:00',
+      saturday_start: null,
+      saturday_end: null,
+      sunday_start: null,
+      sunday_end: null,
       holidays: [],
     });
     return;
@@ -341,7 +361,7 @@ slaRouter.post('/tracking', async (req: Request, res: Response) => {
     return;
   }
 
-  const targetHours = parseFloat(targetResult.rows[0].target_hours);
+  const targetHours = parseFloat(targetResult.rows[0]!.target_hours);
   const deadline = new Date(Date.now() + targetHours * 3600 * 1000);
 
   const result = await pool.query(

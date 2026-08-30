@@ -126,8 +126,8 @@ export default function SuretyImporterDetail() {
         {onc.isClawbacked ? (
           <div className="mt-6 rounded-lg border border-danger bg-danger/10 px-4 py-3 text-sm">
             <strong className="text-danger">Account frozen.</strong> Clawback already executed.
-            Contact the importer and review the on-chain event log below before taking further
-            admin action.
+            Contact the importer and review the on-chain event log below before taking further admin
+            action.
           </div>
         ) : null}
 
@@ -195,7 +195,7 @@ export default function SuretyImporterDetail() {
             </p>
             <button
               disabled={busy !== null || onc.isClawbacked || totalAtRisk === 0n}
-              onClick={() => setConfirmClawback(true)}
+              onClick={() => act('clawback', () => api.clawback(detail.importer.id))}
               className="mt-3 rounded-md bg-danger text-white px-4 py-2 text-sm font-medium hover:opacity-90 disabled:opacity-50"
             >
               {busy === 'clawback'
@@ -233,12 +233,6 @@ export default function SuretyImporterDetail() {
               Dismiss
             </button>
           </div>
-        ) : null}
-
-        {error ? (
-          <p className="mt-4 rounded border border-danger bg-danger/10 px-3 py-2 text-sm text-danger">
-            {error}
-          </p>
         ) : null}
 
         <ErrorBanner error={error} className="mt-4" />

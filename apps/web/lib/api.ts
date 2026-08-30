@@ -239,7 +239,199 @@ export const api = {
     }>('/onboarding/drip'),
   onboardingDripUnsubscribe: () =>
     request<{ success: boolean }>('/onboarding/drip/unsubscribe', { method: 'POST' }),
+
+  // ── Dual Sign-Off Approvals (#1038) ───────────────────────────────────────
+  getDualApprovalConfig: (importerId: string) =>
+    request<DualApprovalConfig>(`/importers/${importerId}/dual-approval`),
+  updateDualApprovalConfig: (importerId: string, b: Partial<DualApprovalConfig>) =>
+    request<DualApprovalConfig>(`/importers/${importerId}/dual-approval`, {
+      method: 'PUT',
+      body: b,
+    }),
+  listWithdrawalRequests: (importerId: string) =>
+    request<{ requests: WithdrawalRequest[] }>(`/importers/${importerId}/withdrawal-requests`),
+  approveWithdrawalRequest: (importerId: string, requestId: string) =>
+    request<{ status: string; jobId?: string; statusUrl?: string }>(
+      `/importers/${importerId}/withdrawal-requests/${requestId}/approve`,
+      { method: 'POST' }
+    ),
+  rejectWithdrawalRequest: (importerId: string, requestId: string, reason?: string) =>
+    request<{ status: string }>(
+      `/importers/${importerId}/withdrawal-requests/${requestId}/reject`,
+      { method: 'POST', body: { reason } }
+    ),
+  cancelWithdrawalRequest: (importerId: string, requestId: string) =>
+    request<{ status: string }>(
+      `/importers/${importerId}/withdrawal-requests/${requestId}/cancel`,
+      { method: 'POST' }
+    ),
+
+  // ── Bulk HS Code Mappings (#1040) ─────────────────────────────────────────
+  uploadSkuMappingsBulk: (
+    importerId: string,
+    b: {
+      mappings?: Array<{ sku: string; htsCode: string; description?: string; dutyRate?: number }>;
+      csvText?: string;
+    }
+  ) =>
+    request<{ success: boolean; version: number; count: number }>(
+      `/importers/${importerId}/sku-mappings/bulk`,
+      { method: 'POST', body: b }
+    ),
+  listSkuMappings: (
+    importerId: string,
+    query?: { search?: string; version?: number; page?: number; per_page?: number }
+  ) => {
+    const params = new URLSearchParams();
+    if (query?.search) params.set('search', query.search);
+    if (query?.version) params.set('version', String(query.version));
+    if (query?.page) params.set('page', String(query.page));
+    if (query?.per_page) params.set('per_page', String(query.per_page));
+    return request<SkuMappingsPage>(`/importers/${importerId}/sku-mappings?${params.toString()}`);
+  },
+  createSkuMapping: (
+    importerId: string,
+    mapping: { sku: string; htsCode: string; description?: string; dutyRate?: number }
+  ) =>
+    request<{ mapping: SkuMapping }>(`/importers/${importerId}/sku-mappings`, {
+      method: 'POST',
+      body: mapping,
+    }),
+  updateSkuMapping: (
+    importerId: string,
+    mappingId: string,
+    mapping: { sku: string; htsCode: string; description?: string; dutyRate?: number }
+  ) =>
+    request<{ mapping: SkuMapping }>(`/importers/${importerId}/sku-mappings/${mappingId}`, {
+      method: 'PUT',
+      body: mapping,
+    }),
+  deleteSkuMapping: (importerId: string, mappingId: string) =>
+    request<{ success: boolean }>(`/importers/${importerId}/sku-mappings/${mappingId}`, {
+      method: 'DELETE',
+    }),
+
+  // ── Compliance Document Expiration Calendar (#1041) ───────────────────────
+  getComplianceCalendar: (importerId: string) =>
+    request<{ items: ComplianceExpirationItem[] }>(`/importers/${importerId}/compliance-calendar`),
+
+  // ── Admin Audit Log Search & Filter (#1039) ───────────────────────────────
+  getAuditLog: (query?: {
+    actor_user_id?: string;
+    action?: string;
+    from?: string;
+    to?: string;
+    search?: string;
+    page?: number;
+    per_page?: number;
+  }) => {
+    const params = new URLSearchParams();
+    if (query?.actor_user_id) params.set('actor_user_id', query.actor_user_id);
+    if (query?.action) params.set('action', query.action);
+    if (query?.from) params.set('from', query.from);
+    if (query?.to) params.set('to', query.to);
+    if (query?.search) params.set('search', query.search);
+    if (query?.page) params.set('page', String(query.page));
+    if (query?.per_page) params.set('per_page', String(query.per_page));
+    return request<AuditLogPage>(`/admin/audit-log?${params.toString()}`);
+  },
+  getAuditLogCsvUrl: (query?: {
+    actor_user_id?: string;
+    action?: string;
+    from?: string;
+    to?: string;
+    search?: string;
+  }) => {
+    const params = new URLSearchParams({ format: 'csv' });
+    if (query?.actor_user_id) params.set('actor_user_id', query.actor_user_id);
+    if (query?.action) params.set('action', query.action);
+    if (query?.from) params.set('from', query.from);
+    if (query?.to) params.set('to', query.to);
+    if (query?.search) params.set('search', query.search);
+    return `${BASE}/admin/audit-log?${params.toString()}`;
+  },
 };
+
+export interface DualApprovalConfig {
+  enabled: boolean;
+  thresholdStroops: string;
+  secondApproverId: string | null;
+  secondApproverEmail: string | null;
+}
+
+export interface WithdrawalRequest {
+  id: string;
+  importer_id: string;
+  requested_by: string;
+  requested_by_email: string | null;
+  amount_stroops: string;
+  status: 'pending' | 'approved' | 'rejected' | 'cancelled';
+  second_approver_id: string | null;
+  second_approver_email: string | null;
+  approved_by: string | null;
+  approved_by_email: string | null;
+  rejected_by: string | null;
+  rejected_by_email: string | null;
+  rejection_reason: string | null;
+  job_id: string | null;
+  created_at: string;
+  resolved_at: string | null;
+}
+
+export interface SkuMapping {
+  id: string;
+  importer_id: string;
+  version: number;
+  sku: string;
+  hts_code: string;
+  description: string | null;
+  duty_rate: number | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SkuMappingsPage {
+  mappings: SkuMapping[];
+  pagination: {
+    total: number;
+    page: number;
+    per_page: number;
+    total_pages: number;
+  };
+}
+
+export interface ComplianceExpirationItem {
+  id: string;
+  entityType: 'kyc' | 'surety_license';
+  title: string;
+  documentType: string;
+  expirationDate: string;
+  daysUntilExpiration: number;
+  urgency: 'critical' | 'warning' | 'upcoming' | 'normal';
+  deepLink: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface AuditLogEntry {
+  id: string;
+  actor_user_id: string | null;
+  actor_email: string | null;
+  action: string;
+  target_id: string | null;
+  payload: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface AuditLogPage {
+  data: AuditLogEntry[];
+  pagination: {
+    total: number;
+    page: number;
+    per_page: number;
+    total_pages: number;
+  };
+}
 
 export function stroopsToXlm(stroops: string | bigint | number): string {
   const n = typeof stroops === 'string' ? BigInt(stroops) : BigInt(stroops);
