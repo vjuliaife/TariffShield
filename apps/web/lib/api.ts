@@ -335,6 +335,22 @@ export const api = {
     if (query?.per_page) params.set('per_page', String(query.per_page));
     return request<AuditLogPage>(`/admin/audit-log?${params.toString()}`);
   },
+  // ── NPS/Feedback Survey (#1035) ───────────────────────────────────────────
+  npsPromptStatus: () =>
+    request<{ shouldShow: boolean; cadenceDays: number; lastShownAt: string | null }>(
+      '/nps/prompt-status'
+    ),
+  npsDismiss: () => request<{ success: boolean }>('/nps/dismiss', { method: 'POST' }),
+  npsRespond: (score: number, comment?: string) =>
+    request<{ success: boolean }>('/nps/respond', { method: 'POST', body: { score, comment } }),
+  npsAdminTrend: () => request<{ trend: NpsTrendPoint[] }>('/nps/admin/trend'),
+
+  // ── Branded Report Export Templates (#1032) ───────────────────────────────
+  getReportTemplate: () =>
+    request<{ template: ReportTemplate; isDefault: boolean }>('/report-templates'),
+  saveReportTemplate: (b: Partial<ReportTemplate>) =>
+    request<{ template: ReportTemplate }>('/report-templates', { method: 'PUT', body: b }),
+
   getAuditLogCsvUrl: (query?: {
     actor_user_id?: string;
     action?: string;
@@ -411,6 +427,21 @@ export interface ComplianceExpirationItem {
   urgency: 'critical' | 'warning' | 'upcoming' | 'normal';
   deepLink: string;
   metadata?: Record<string, unknown>;
+}
+
+export interface NpsTrendPoint {
+  weekStart: string;
+  promoters: number;
+  passives: number;
+  detractors: number;
+  total: number;
+  nps: number;
+}
+
+export interface ReportTemplate {
+  logoUrl: string | null;
+  headerText: string | null;
+  footerText: string | null;
 }
 
 export interface AuditLogEntry {

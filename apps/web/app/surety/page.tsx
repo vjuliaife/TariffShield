@@ -6,6 +6,8 @@ import { useEffect, useState } from 'react';
 import { Nav } from '@/components/Nav';
 import { api, ApiError, type Importer, type ImporterMetrics, stroopsToXlm } from '@/lib/api';
 import { getUser, isAuthenticated } from '@/lib/auth';
+import { NpsTrendWidget } from '@/components/NpsTrendWidget';
+import { ReportTemplateEditor } from '@/components/ReportTemplateEditor';
 
 export default function SuretyDashboard() {
   const router = useRouter();
@@ -185,6 +187,11 @@ export default function SuretyDashboard() {
               ))}
             </ul>
           )}
+        </div>
+
+        <div className="mt-8 grid gap-4 sm:grid-cols-2">
+          <NpsTrendWidget />
+          <ReportTemplateEditor />
         </div>
       </main>
     </>

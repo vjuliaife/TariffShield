@@ -36,6 +36,8 @@ import { bondAnnotationsRouter } from './routes/bond-annotations.js';
 import { slaRouter } from './routes/sla.js';
 import { developerRouter } from './routes/developer.js';
 import { onboardingRouter } from './routes/onboarding.js';
+import { npsRouter } from './routes/nps.js';
+import { reportTemplatesRouter } from './routes/report-templates.js';
 import { apiKeyUsageMeter } from './services/api-key-usage.js';
 import { startApiKeyUsagePruneScheduler } from './jobs/prune-api-key-usage.js';
 import { startOnboardingDripScheduler } from './services/onboarding-drip.js';
@@ -336,6 +338,8 @@ app.use('/bond-annotations', bondAnnotationsRouter);
 app.use('/sla', slaRouter);
 app.use('/developer', developerRouter);
 app.use('/onboarding', onboardingRouter);
+app.use('/nps', npsRouter);
+app.use('/report-templates', reportTemplatesRouter);
 app.use('/api/v1/regulatory', regulatoryRouter);
 app.use('/bonds', bondWebhookRouter); // unauthenticated DocuSign webhook
 app.use('/api', bondSignaturesRouter); // authenticated bond signature routes
