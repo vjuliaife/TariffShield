@@ -55,6 +55,16 @@ export function DepositWizard({
 
   const bucketLabel = bucket === 'collateral' ? 'Collateral' : 'Reserve (auto-top-up pool)';
 
+  const parsedXlm = Number(xlm);
+  const amountError =
+    !xlm || xlm.trim() === ''
+      ? 'Please enter a deposit amount.'
+      : isNaN(parsedXlm) || parsedXlm <= 0
+        ? 'Amount must be greater than 0 XLM.'
+        : parsedXlm < 0.1
+          ? 'Minimum deposit amount is 0.1 XLM.'
+          : null;
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-end -mb-2">
@@ -72,20 +82,27 @@ export function DepositWizard({
 
       {step === 'amount' && (
         <>
-          <div className="flex gap-2">
-            <input
-              type="number"
-              step="0.1"
-              min="0.1"
-              value={xlm}
-              onChange={(e) => setXlm(e.target.value)}
-              placeholder="XLM"
-              className="flex-1 rounded-md border border-border bg-background px-2 py-1.5 text-sm focus:border-accent focus:outline-none"
-            />
+          <div>
+            <div className="flex gap-2">
+              <input
+                type="number"
+                step="0.1"
+                min="0.1"
+                value={xlm}
+                onChange={(e) => setXlm(e.target.value)}
+                placeholder="XLM"
+                className="flex-1 rounded-md border border-border bg-background px-2 py-1.5 text-sm focus:border-accent focus:outline-none"
+              />
+            </div>
+            <p className="mt-1 text-xs text-muted">Minimum deposit amount: 0.1 XLM</p>
+            {amountError && <p className="mt-1 text-xs text-danger">{amountError}</p>}
           </div>
           <button
-            onClick={() => setStep('preview')}
-            className="w-full rounded-md bg-accent text-accent-foreground px-3 py-1.5 text-sm hover:opacity-90"
+            onClick={() => {
+              if (!amountError) setStep('preview');
+            }}
+            disabled={Boolean(amountError)}
+            className="w-full rounded-md bg-accent text-accent-foreground px-3 py-1.5 text-sm hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Next
           </button>
@@ -153,7 +170,16 @@ export function DepositWizard({
               {xlm} XLM deposited to {bucketLabel.toLowerCase()}
             </p>
             {txHash && (
-              <p className="mt-2 text-xs font-mono break-all text-accent">{txHash.slice(0, 16)}…</p>
+              <p className="mt-2 text-xs font-mono break-all">
+                <a
+                  href={`https://stellar.expert/explorer/testnet/tx/${txHash}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-accent hover:underline"
+                >
+                  {txHash.slice(0, 16)}… ↗
+                </a>
+              </p>
             )}
           </div>
           {/* #1049 — the receipt is no longer a dead end: the user can start
