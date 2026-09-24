@@ -166,6 +166,11 @@ importersRouter.post('/', async (req: Request, res: Response) => {
     onChain.txHash,
     importer.id,
   ]);
+  await pool.query(
+    `UPDATE importer_referrals SET status = 'converted', converted_at = now()
+     WHERE referred_user_id = $1 AND status = 'pending'`,
+    [user.id]
+  );
   // #228: bare ON CONFLICT DO NOTHING — required now that contract_events is
   // partitioned; see lib/contract-events-partitions.ts.
   await pool.query(
@@ -2413,7 +2418,7 @@ importersRouter.get('/:id/portfolio', async (req: Request, res: Response) => {
   );
 
   const bonds = bondsResult.rows;
-  
+
   // Aggregate totals
   const totalCoverage = bonds.reduce((sum, bond) => sum + Number(bond.coverage_amount || 0), 0);
   const activeBonds = bonds.filter(bond => bond.status === 'active');
@@ -2445,7 +2450,7 @@ importersRouter.get('/:id/portfolio', async (req: Request, res: Response) => {
   // Sort options
   const sortBy = String(req.query.sort_by || 'created_at');
   const sortOrder = String(req.query.sort_order || 'desc');
-  
+
   let sortedBonds = [...bonds];
   if (sortBy === 'expires_at') {
     sortedBonds.sort((a, b) => {
@@ -2517,7 +2522,7 @@ importersRouter.get('/:id/forecast', async (req: Request, res: Response) => {
   );
 
   const uploads = uploadsResult.rows;
-  
+
   if (uploads.length < 2) {
     res.json({
       forecast: null,
@@ -2540,10 +2545,10 @@ importersRouter.get('/:id/forecast', async (req: Request, res: Response) => {
   const sumY = yValues.reduce((a, b) => a + b, 0);
   const sumXY = xValues.reduce((sum, x, i) => sum + x * (yValues[i] ?? 0), 0);
   const sumX2 = xValues.reduce((sum, x) => sum + x * x, 0);
-  
+
   const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
   const intercept = (sumY - slope * sumX) / n;
-  
+
   // Project 30, 60, 90 days out (assuming monthly uploads)
   const lastX = n - 1;
   const firstUpload = uploads[0];

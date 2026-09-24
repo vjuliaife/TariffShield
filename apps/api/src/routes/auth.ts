@@ -74,6 +74,11 @@ const SignupSchema = z.object({
   }),
   // #322 — accept the current privacy policy version at signup
   privacyPolicyVersionId: z.string().optional(),
+  referralCode: z
+    .string()
+    .trim()
+    .regex(/^[A-Fa-f0-9]{12}$/)
+    .optional(),
 });
 
 authRouter.post('/signup', async (req: Request, res: Response) => {
@@ -82,7 +87,25 @@ authRouter.post('/signup', async (req: Request, res: Response) => {
     res.status(400).json({ error: 'invalid input', details: parse.error.issues });
     return;
   }
-  const { email, password, role, privacyPolicyVersionId } = parse.data;
+  const { email, password, role, privacyPolicyVersionId, referralCode } = parse.data;
+  let referrerId: string | null = null;
+  if (referralCode) {
+    const referrer = await pool.query<{ id: string; email: string }>(
+      `SELECT id, email FROM users
+       WHERE role = 'importer' AND referral_code = upper($1)
+       LIMIT 1`,
+      [referralCode]
+    );
+    if (!referrer.rowCount || role !== 'importer') {
+      res.status(400).json({ error: 'invalid referral code' });
+      return;
+    }
+    if (referrer.rows[0]!.email === email) {
+      res.status(400).json({ error: 'self-referrals are not allowed' });
+      return;
+    }
+    referrerId = referrer.rows[0]!.id;
+  }
   const hash = await hashPassword(password);
   try {
     // Resolve the current policy version to record at signup (#322)
@@ -99,6 +122,14 @@ authRouter.post('/signup', async (req: Request, res: Response) => {
       [email, hash, role]
     );
     const u = result.rows[0]!;
+
+    if (referrerId) {
+      await pool.query(
+        `INSERT INTO importer_referrals (referrer_user_id, referred_user_id, referral_code)
+         VALUES ($1, $2, upper($3))`,
+        [referrerId, u.id, referralCode]
+      );
+    }
 
     // Record privacy policy acceptance transactionally with signup (#322)
     if (policyVersionId) {
