@@ -41,15 +41,23 @@ export function Nav() {
             <>
               <div className="flex flex-col items-start leading-tight">
                 {user.role === 'importer' ? (
-                  <Link href="/app" className="text-foreground hover:text-accent">
-                    Bond dashboard
-                  </Link>
+                  <>
+                    <Link href="/app" className="text-foreground hover:text-accent">
+                      Bond dashboard
+                    </Link>
+                    <Link href="/app/settings" className="text-foreground hover:text-accent">
+                      Account settings
+                    </Link>
+                  </>
                 ) : (
                   <Link href="/surety" className="text-foreground hover:text-accent">
                     Surety admin
                   </Link>
                 )}
-                <span className="text-[11px] text-muted sm:hidden max-w-[130px] truncate" title={user.email}>
+                <span
+                  className="text-[11px] text-muted sm:hidden max-w-[130px] truncate"
+                  title={user.email}
+                >
                   {user.email}
                 </span>
               </div>

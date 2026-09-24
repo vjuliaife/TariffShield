@@ -28,6 +28,8 @@ import { DashboardSkeleton } from '@/components/DashboardSkeleton';
 import { Spinner } from '@/components/Spinner';
 import { ErrorBanner } from '@/components/ErrorBanner';
 import { CurrencyDisplaySettings } from '@/components/CurrencyDisplaySettings';
+import { DashboardWidgetLayout } from '@/components/DashboardWidgetLayout';
+import { ImporterSetupPanel } from '@/components/ImporterSetupPanel';
 import { NpsSurvey } from '@/components/NpsSurvey';
 import { useDisplayCurrency } from '@/lib/useDisplayCurrency';
 import { formatConverted } from '@/lib/currency';
@@ -155,6 +157,36 @@ function ImporterDashboard() {
 
   const onc = detail.onChainAccount;
 
+  const dashboardWidgets = {
+    health: <HealthScore collateral={collateral} required={required} reserve={reserve} />,
+    balance: (
+      <BalanceSummary
+        onChainAccount={onc}
+        shortfall={shortfall}
+        excess={excess}
+        utilization={utilization}
+        rate={displayCurrency.rate}
+      />
+    ),
+    yield: <YieldProjectionPanel currentBalanceStroops={onc.collateralBalance} />,
+    activity: (
+      <section aria-label="Bond activity">
+        <BondTimeline events={events} importerId={importer.id} userRole="importer" />
+        <div className="mt-8">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">
+            On-chain event log
+          </h2>
+          <EventLog
+            key={importer.id + '-' + refreshCount}
+            importerId={importer.id}
+            events={events}
+            setEvents={setEvents}
+          />
+        </div>
+      </section>
+    ),
+  };
+
   return (
     <>
       <Nav />
@@ -198,25 +230,11 @@ function ImporterDashboard() {
           <CurrencyDisplaySettings {...displayCurrency} />
         </div>
 
-        <div className="grid gap-4 sm:grid-cols-5 mt-4">
-          <div className="sm:col-span-2">
-            <HealthScore collateral={collateral} required={required} reserve={reserve} />
-          </div>
-          <div className="sm:col-span-3">
-            <BalanceSummary
-              onChainAccount={onc}
-              shortfall={shortfall}
-              excess={excess}
-              utilization={utilization}
-              rate={displayCurrency.rate}
-            />
-          </div>
-        </div>
-
-        <YieldProjectionPanel currentBalanceStroops={onc.collateralBalance} />
+        <DashboardWidgetLayout widgets={dashboardWidgets} />
+        <ImporterSetupPanel />
 
         {!onc.isClawbacked && (
-          <div className="mt-6 grid gap-4 sm:grid-cols-3">
+          <div id="tariff" className="mt-6 grid gap-4 sm:grid-cols-3">
             <ActionCard
               title="Update tariff exposure"
               description="Re-run required collateral from annual duty estimate. Demo computes required = annual_duty × 10% × 50%."
@@ -257,7 +275,7 @@ function ImporterDashboard() {
         )}
 
         {!onc.isClawbacked && (
-          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          <div id="deposit" className="mt-4 grid gap-4 sm:grid-cols-2">
             <button
               onClick={() => setShowTopUpConfirm(true)}
               disabled={busy !== null || shortfall === 0n}
@@ -339,26 +357,12 @@ function ImporterDashboard() {
 
         <ErrorBanner error={error} className="mt-4" />
 
-        <BondTimeline events={events} importerId={importer.id} userRole="importer" />
-
-        <div className="mt-8">
+        <div id="kyc" className="mt-8">
           <KycUploadDropzone importerId={importer.id} />
         </div>
 
         <div className="mt-8">
           <ComplianceExpirationCalendar importerId={importer.id} />
-        </div>
-
-        <div className="mt-10">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">
-            On-chain event log
-          </h2>
-          <EventLog
-            key={importer.id + '-' + refreshCount}
-            importerId={importer.id}
-            events={events}
-            setEvents={setEvents}
-          />
         </div>
       </main>
 

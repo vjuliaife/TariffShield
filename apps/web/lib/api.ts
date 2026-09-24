@@ -131,7 +131,13 @@ async function request<T>(
 const importerPrefetchCache = new Map<string, Promise<ImporterDetail>>();
 
 export const api = {
-  signup: (b: { email: string; password: string; role: 'importer' | 'surety_admin' }) =>
+  signup: (b: {
+    email: string;
+    password: string;
+    role: 'importer' | 'surety_admin';
+    referralCode?: string;
+    accept_tos: boolean;
+  }) =>
     request<{ token: string; user: import('./auth').AuthUser }>('/auth/signup', {
       method: 'POST',
       body: b,
@@ -239,6 +245,68 @@ export const api = {
     }>('/onboarding/drip'),
   onboardingDripUnsubscribe: () =>
     request<{ success: boolean }>('/onboarding/drip/unsubscribe', { method: 'POST' }),
+
+  dashboardPreferences: () =>
+    request<{ widgetOrder: DashboardWidgetId[]; hiddenWidgets: DashboardWidgetId[] }>(
+      '/importer-experience/dashboard-preferences'
+    ),
+  saveDashboardPreferences: (preferences: {
+    widgetOrder: DashboardWidgetId[];
+    hiddenWidgets: DashboardWidgetId[];
+  }) =>
+    request<{ widgetOrder: DashboardWidgetId[]; hiddenWidgets: DashboardWidgetId[] }>(
+      '/importer-experience/dashboard-preferences',
+      { method: 'PUT', body: preferences }
+    ),
+  onboardingChecklist: () =>
+    request<{
+      steps: { id: string; label: string; href: string; complete: boolean }[];
+      complete: boolean;
+      dismissed: boolean;
+    }>('/importer-experience/onboarding-checklist'),
+  dismissOnboardingChecklist: () =>
+    request<{ success: boolean }>('/importer-experience/onboarding-checklist/dismiss', {
+      method: 'POST',
+    }),
+  referrals: () =>
+    request<{
+      code: string;
+      referrals: {
+        id: string;
+        email: string;
+        status: 'pending' | 'converted';
+        created_at: string;
+      }[];
+    }>('/importer-experience/referrals'),
+  referralReport: () =>
+    request<{
+      referrals: {
+        referral_code: string;
+        status: 'pending' | 'converted';
+        created_at: string;
+        converted_at: string | null;
+        referrer_id: string;
+        referrer_email: string;
+        referred_id: string;
+        referred_email: string;
+      }[];
+    }>('/importer-experience/referrals/report'),
+  coSureties: (importerId: string) =>
+    request<{
+      participants: { id: string; name: string; reference: string; participationBps: number }[];
+    }>(`/importer-experience/importers/${importerId}/co-sureties`),
+  saveCoSureties: (
+    importerId: string,
+    participants: { name: string; reference: string; percentage: number }[]
+  ) =>
+    request<{ participants: { name: string; reference: string; percentage: number }[] }>(
+      `/importer-experience/importers/${importerId}/co-sureties`,
+      { method: 'PUT', body: { participants } }
+    ),
+  coSuretyExposure: () =>
+    request<{
+      participants: { name: string; reference: string; bond_count: number; exposure: string }[];
+    }>('/importer-experience/co-surety-exposure'),
 
   // ── Dual Sign-Off Approvals (#1038) ───────────────────────────────────────
   getDualApprovalConfig: (importerId: string) =>
@@ -420,6 +488,8 @@ export const api = {
       { method: 'POST', body: { accept, note } }
     ),
 };
+
+export type DashboardWidgetId = 'health' | 'balance' | 'yield' | 'activity';
 
 export interface DualApprovalConfig {
   enabled: boolean;

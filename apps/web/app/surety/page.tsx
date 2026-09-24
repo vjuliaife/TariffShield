@@ -8,6 +8,7 @@ import { api, ApiError, type Importer, type ImporterMetrics, stroopsToXlm } from
 import { getUser, isAuthenticated } from '@/lib/auth';
 import { NpsTrendWidget } from '@/components/NpsTrendWidget';
 import { ReportTemplateEditor } from '@/components/ReportTemplateEditor';
+import { CoSuretyExposureWidget } from '@/components/CoSuretyExposureWidget';
 
 export default function SuretyDashboard() {
   const router = useRouter();
@@ -212,6 +213,7 @@ export default function SuretyDashboard() {
           <NpsTrendWidget />
           <ReportTemplateEditor />
         </div>
+        <CoSuretyExposureWidget />
       </main>
     </>
   );
