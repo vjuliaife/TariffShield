@@ -220,14 +220,44 @@ authRouter.post('/login', async (req: Request, res: Response) => {
   }
 
   const sessionId = await createSession(u.id, ipAddress, userAgent);
-  const token = signToken({ id: u.id, email: u.email, role: u.role, sessionId });
+
+  let importerId: string | undefined;
+  let importerRole: 'owner' | 'admin' | 'finance' | 'viewer' | undefined;
+  if (u.role === 'importer') {
+    const ownerRes = await pool.query(
+      'SELECT id FROM importers WHERE user_id = $1 AND deleted_at IS NULL',
+      [u.id]
+    );
+    if (ownerRes.rowCount && ownerRes.rowCount > 0) {
+      importerId = ownerRes.rows[0]!.id;
+      importerRole = 'owner';
+    } else {
+      const memberRes = await pool.query(
+        'SELECT importer_id, role FROM importer_members WHERE user_id = $1 AND status = \'active\'',
+        [u.id]
+      );
+      if (memberRes.rowCount && memberRes.rowCount > 0) {
+        importerId = memberRes.rows[0]!.importer_id;
+        importerRole = memberRes.rows[0]!.role as 'admin' | 'finance' | 'viewer';
+      }
+    }
+  }
+
+  const token = signToken({
+    id: u.id,
+    email: u.email,
+    role: u.role,
+    sessionId,
+    importerId,
+    importerRole,
+  });
   const refreshToken = generateRefreshTokenPair(u.id, req);
   await refreshToken.tokenPromise;
 
   res.json({
     token,
     refreshToken: refreshToken.rawToken,
-    user: { id: u.id, email: u.email, role: u.role },
+    user: { id: u.id, email: u.email, role: u.role, importerId, importerRole },
   });
 });
 
@@ -241,6 +271,163 @@ authRouter.post('/logout', sessionLimiter, authMiddleware, async (req: Request, 
     await revokeRefreshToken(tokenHash);
   }
   res.json({ message: 'logged out' });
+});
+
+// ── #1015: Invitation Verification & Acceptance Endpoints ───────────────────
+
+const VerifyInviteSchema = z.object({
+  token: z.string().min(1),
+});
+
+authRouter.get('/invites/verify', async (req: Request, res: Response) => {
+  const parse = VerifyInviteSchema.safeParse(req.query);
+  if (!parse.success) {
+    res.status(400).json({ error: 'invalid token parameter' });
+    return;
+  }
+  const tokenHash = hashToken(parse.data.token);
+  const result = await pool.query(
+    `SELECT inv.id, inv.email, inv.role, inv.importer_id, inv.expires_at, inv.status, i.legal_name
+     FROM importer_invites inv
+     JOIN importers i ON i.id = inv.importer_id
+     WHERE inv.token_hash = $1`,
+    [tokenHash]
+  );
+  if (!result.rowCount) {
+    res.status(404).json({ error: 'invitation not found' });
+    return;
+  }
+  const invite = result.rows[0]!;
+  if (invite.status !== 'pending' || new Date(invite.expires_at) <= new Date()) {
+    res.status(410).json({ error: 'invitation has expired or is no longer valid' });
+    return;
+  }
+
+  res.json({
+    valid: true,
+    invite: {
+      id: invite.id,
+      email: invite.email,
+      role: invite.role,
+      importerId: invite.importer_id,
+      legalName: invite.legal_name,
+      expiresAt: invite.expires_at,
+    },
+  });
+});
+
+const AcceptInviteSchema = z.object({
+  token: z.string().min(1),
+  password: z.string().min(8).optional(),
+});
+
+authRouter.post('/invites/accept', async (req: Request, res: Response) => {
+  const parse = AcceptInviteSchema.safeParse(req.body);
+  if (!parse.success) {
+    res.status(400).json({ error: 'invalid input', details: parse.error.issues });
+    return;
+  }
+  const { token: rawToken, password } = parse.data;
+  const tokenHash = hashToken(rawToken);
+
+  const inviteResult = await pool.query(
+    `SELECT inv.id, inv.email, inv.role, inv.importer_id, inv.expires_at, inv.status
+     FROM importer_invites inv
+     WHERE inv.token_hash = $1`,
+    [tokenHash]
+  );
+
+  if (!inviteResult.rowCount) {
+    res.status(404).json({ error: 'invitation not found' });
+    return;
+  }
+  const invite = inviteResult.rows[0]!;
+  if (invite.status !== 'pending' || new Date(invite.expires_at) <= new Date()) {
+    res.status(410).json({ error: 'invitation has expired or is no longer valid' });
+    return;
+  }
+
+  // Find existing user or register new user for invitation email
+  const existingUser = await pool.query(
+    'SELECT id, email, password_hash, role FROM users WHERE email = $1',
+    [invite.email.toLowerCase()]
+  );
+
+  let userId: string;
+  let userEmail = invite.email.toLowerCase();
+
+  if (existingUser.rowCount && existingUser.rowCount > 0) {
+    const u = existingUser.rows[0]!;
+    if (password) {
+      const validPw = await verifyPassword(password, u.password_hash);
+      if (!validPw) {
+        res.status(401).json({ error: 'invalid password for existing account' });
+        return;
+      }
+    }
+    userId = u.id;
+  } else {
+    if (!password) {
+      res.status(400).json({ error: 'password required to set up new team member account' });
+      return;
+    }
+    const hash = await hashPassword(password);
+    const newU = await pool.query(
+      `INSERT INTO users (email, password_hash, role) VALUES ($1, $2, 'importer') RETURNING id, email`,
+      [userEmail, hash]
+    );
+    userId = newU.rows[0]!.id;
+  }
+
+  // Bind team member to importer with assigned role
+  await pool.query(
+    `INSERT INTO importer_members (importer_id, user_id, role, status)
+     VALUES ($1, $2, $3, 'active')
+     ON CONFLICT (importer_id, user_id)
+     DO UPDATE SET role = EXCLUDED.role, status = 'active', updated_at = NOW()`,
+    [invite.importer_id, userId, invite.role]
+  );
+
+  // Update invite status
+  await pool.query(
+    `UPDATE importer_invites SET status = 'accepted' WHERE id = $1`,
+    [invite.id]
+  );
+
+  // Audit log attribution
+  const { logAudit } = await import('../db.js');
+  await logAudit(userId, 'invite_accepted', invite.importer_id, {
+    inviteId: invite.id,
+    role: invite.role,
+  });
+
+  const ipAddress = req.ip ?? 'unknown';
+  const userAgent = req.get('user-agent') ?? 'unknown';
+  const sessionId = await createSession(userId, ipAddress, userAgent);
+
+  const jwtToken = signToken({
+    id: userId,
+    email: userEmail,
+    role: 'importer',
+    sessionId,
+    importerId: invite.importer_id,
+    importerRole: invite.role,
+  });
+
+  const refreshToken = generateRefreshTokenPair(userId, req);
+  await refreshToken.tokenPromise;
+
+  res.json({
+    token: jwtToken,
+    refreshToken: refreshToken.rawToken,
+    user: {
+      id: userId,
+      email: userEmail,
+      role: 'importer',
+      importerId: invite.importer_id,
+      importerRole: invite.role,
+    },
+  });
 });
 
 // ── #235: POST /auth/refresh — rotate refresh token and issue new access token ──

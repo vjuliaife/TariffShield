@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from 'express';
-import { createHash } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import { Keypair } from '@stellar/stellar-sdk';
 import { z } from 'zod';
 import {
@@ -203,8 +203,11 @@ importersRouter.get('/', async (req: Request, res: Response) => {
     );
   } else {
     r = await pool.query(
-      `SELECT i.id, i.legal_name, i.bond_id, i.stellar_address, i.created_at
-         FROM importers i WHERE i.user_id = $1`,
+      `SELECT DISTINCT i.id, i.legal_name, i.bond_id, i.stellar_address, i.created_at
+         FROM importers i
+         LEFT JOIN importer_members m ON m.importer_id = i.id AND m.user_id = $1 AND m.status = 'active'
+         WHERE (i.user_id = $1 OR m.id IS NOT NULL) AND i.deleted_at IS NULL
+         ORDER BY i.created_at DESC`,
       [user.id]
     );
   }
@@ -711,18 +714,267 @@ importersRouter.post('/admin/:id/review/decision', async (req: Request, res: Res
   }
 });
 
+export type SubAccountRole = 'owner' | 'admin' | 'finance' | 'viewer';
+
+export async function getMemberRoleFor(req: Request, importerId: string): Promise<SubAccountRole | null> {
+  const user = (req as AuthedRequest).user;
+  if (user.role === 'surety_admin') {
+    return 'owner';
+  }
+  const ownerRes = await pool.query(
+    'SELECT id FROM importers WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL',
+    [importerId, user.id]
+  );
+  if (ownerRes.rowCount && ownerRes.rowCount > 0) {
+    return 'owner';
+  }
+  const memberRes = await pool.query(
+    `SELECT role FROM importer_members WHERE importer_id = $1 AND user_id = $2 AND status = 'active'`,
+    [importerId, user.id]
+  );
+  if (memberRes.rowCount && memberRes.rowCount > 0) {
+    return memberRes.rows[0]!.role as SubAccountRole;
+  }
+  return null;
+}
+
 async function loadImporterFor(req: Request, importerId: string) {
   const user = (req as AuthedRequest).user;
   if (user.role === 'surety_admin') {
-    const r = await pool.query('SELECT * FROM importers WHERE id = $1', [importerId]);
+    const r = await pool.query('SELECT * FROM importers WHERE id = $1 AND deleted_at IS NULL', [importerId]);
     return r.rows[0] ?? null;
   }
-  const r = await pool.query('SELECT * FROM importers WHERE id = $1 AND user_id = $2', [
-    importerId,
-    user.id,
-  ]);
+  const r = await pool.query(
+    `SELECT i.* FROM importers i
+     LEFT JOIN importer_members m ON m.importer_id = i.id AND m.user_id = $2 AND m.status = 'active'
+     WHERE i.id = $1 AND i.deleted_at IS NULL AND (i.user_id = $2 OR m.id IS NOT NULL)`,
+    [importerId, user.id]
+  );
   return r.rows[0] ?? null;
 }
+
+// ── #1015 Sub-Account / Team Member Management Routes ───────────────────────
+
+const InviteTeamMemberSchema = z.object({
+  email: z.string().email(),
+  role: z.enum(['admin', 'finance', 'viewer']),
+});
+
+// GET /importers/:id/members — list active team members and pending invitations
+importersRouter.get('/:id/members', async (req: Request, res: Response) => {
+  const importer = await loadImporterFor(req, String(req.params.id ?? ''));
+  if (!importer) {
+    res.status(404).json({ error: 'not found' });
+    return;
+  }
+
+  const role = await getMemberRoleFor(req, importer.id);
+  if (!role) {
+    res.status(403).json({ error: 'insufficient permissions' });
+    return;
+  }
+
+  const membersRes = await pool.query(
+    `SELECT m.id, m.user_id, u.email, m.role, m.status, m.created_at, m.updated_at
+     FROM importer_members m
+     JOIN users u ON u.id = m.user_id
+     WHERE m.importer_id = $1 AND m.status = 'active'
+     ORDER BY m.created_at ASC`,
+    [importer.id]
+  );
+
+  const invitesRes = await pool.query(
+    `SELECT id, email, role, status, expires_at, created_at
+     FROM importer_invites
+     WHERE importer_id = $1 AND status = 'pending' AND expires_at > NOW()
+     ORDER BY created_at DESC`,
+    [importer.id]
+  );
+
+  res.json({
+    members: membersRes.rows.map((row) => ({
+      id: row.id,
+      userId: row.user_id,
+      email: row.email,
+      role: row.role,
+      status: row.status,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    })),
+    invites: invitesRes.rows.map((row) => ({
+      id: row.id,
+      email: row.email,
+      role: row.role,
+      status: row.status,
+      expiresAt: row.expires_at,
+      createdAt: row.created_at,
+    })),
+  });
+});
+
+// POST /importers/:id/invites — create a new team member invite (owner / admin only)
+importersRouter.post('/:id/invites', async (req: Request, res: Response) => {
+  const user = (req as AuthedRequest).user;
+  const importer = await loadImporterFor(req, String(req.params.id ?? ''));
+  if (!importer) {
+    res.status(404).json({ error: 'not found' });
+    return;
+  }
+
+  const role = await getMemberRoleFor(req, importer.id);
+  if (role !== 'owner' && role !== 'admin') {
+    res.status(403).json({ error: 'owner or admin role required to invite team members' });
+    return;
+  }
+
+  const parse = InviteTeamMemberSchema.safeParse(req.body ?? {});
+  if (!parse.success) {
+    res.status(400).json({ error: 'invalid input', details: parse.error.issues });
+    return;
+  }
+
+  const { email, role: memberRole } = parse.data;
+  const targetEmail = email.toLowerCase().trim();
+
+  // Check if user is already an active team member or the account owner
+  const existingMember = await pool.query(
+    `SELECT m.id FROM importer_members m
+     JOIN users u ON u.id = m.user_id
+     WHERE m.importer_id = $1 AND LOWER(u.email) = $2 AND m.status = 'active'`,
+    [importer.id, targetEmail]
+  );
+  if (existingMember.rowCount && existingMember.rowCount > 0) {
+    res.status(409).json({ error: 'user is already an active member of this importer account' });
+    return;
+  }
+
+  const ownerCheck = await pool.query(
+    `SELECT i.id FROM importers i
+     JOIN users u ON u.id = i.user_id
+     WHERE i.id = $1 AND LOWER(u.email) = $2`,
+    [importer.id, targetEmail]
+  );
+  if (ownerCheck.rowCount && ownerCheck.rowCount > 0) {
+    res.status(409).json({ error: 'cannot invite the account owner' });
+    return;
+  }
+
+  const rawToken = randomBytes(32).toString('hex');
+  const tokenHash = createHash('sha256').update(rawToken).digest('hex');
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+
+  const inviteRes = await pool.query(
+    `INSERT INTO importer_invites (importer_id, invited_by, email, role, token_hash, expires_at)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING id, email, role, status, expires_at, created_at`,
+    [importer.id, user.id, targetEmail, memberRole, tokenHash, expiresAt]
+  );
+
+  const invite = inviteRes.rows[0]!;
+
+  await logAudit(user.id, 'importer_invite_created', importer.id, {
+    inviteId: invite.id,
+    invitedEmail: targetEmail,
+    assignedRole: memberRole,
+  });
+
+  res.status(201).json({
+    invite: {
+      id: invite.id,
+      email: invite.email,
+      role: invite.role,
+      status: invite.status,
+      expiresAt: invite.expires_at,
+      createdAt: invite.created_at,
+    },
+    token: rawToken,
+  });
+});
+
+// DELETE /importers/:id/members/:memberId — revoke an active team member's access (owner / admin only)
+importersRouter.delete('/:id/members/:memberId', async (req: Request, res: Response) => {
+  const user = (req as AuthedRequest).user;
+  const importer = await loadImporterFor(req, String(req.params.id ?? ''));
+  if (!importer) {
+    res.status(404).json({ error: 'not found' });
+    return;
+  }
+
+  const callerRole = await getMemberRoleFor(req, importer.id);
+  if (callerRole !== 'owner' && callerRole !== 'admin') {
+    res.status(403).json({ error: 'owner or admin role required to revoke team members' });
+    return;
+  }
+
+  const { memberId } = req.params;
+  const memberRes = await pool.query(
+    `SELECT id, user_id, role, status FROM importer_members WHERE id = $1 AND importer_id = $2`,
+    [memberId, importer.id]
+  );
+  const member = memberRes.rows[0];
+  if (!member || member.status !== 'active') {
+    res.status(404).json({ error: 'active member not found' });
+    return;
+  }
+
+  // Admins cannot revoke owners or other admins unless they are owner
+  if (callerRole === 'admin' && (member.role === 'admin' || member.role === 'owner')) {
+    res.status(403).json({ error: 'admins cannot revoke other admins or owners' });
+    return;
+  }
+
+  await pool.query(
+    `UPDATE importer_members SET status = 'revoked', updated_at = NOW() WHERE id = $1`,
+    [member.id]
+  );
+
+  await logAudit(user.id, 'importer_member_revoked', importer.id, {
+    memberId: member.id,
+    revokedUserId: member.user_id,
+    revokedRole: member.role,
+  });
+
+  res.json({ success: true });
+});
+
+// DELETE /importers/:id/invites/:inviteId — revoke a pending invitation (owner / admin only)
+importersRouter.delete('/:id/invites/:inviteId', async (req: Request, res: Response) => {
+  const user = (req as AuthedRequest).user;
+  const importer = await loadImporterFor(req, String(req.params.id ?? ''));
+  if (!importer) {
+    res.status(404).json({ error: 'not found' });
+    return;
+  }
+
+  const callerRole = await getMemberRoleFor(req, importer.id);
+  if (callerRole !== 'owner' && callerRole !== 'admin') {
+    res.status(403).json({ error: 'owner or admin role required to revoke invitations' });
+    return;
+  }
+
+  const { inviteId } = req.params;
+  const inviteRes = await pool.query(
+    `SELECT id, email, role, status FROM importer_invites WHERE id = $1 AND importer_id = $2`,
+    [inviteId, importer.id]
+  );
+  const invite = inviteRes.rows[0];
+  if (!invite || invite.status !== 'pending') {
+    res.status(404).json({ error: 'pending invitation not found' });
+    return;
+  }
+
+  await pool.query(
+    `UPDATE importer_invites SET status = 'revoked', updated_at = NOW() WHERE id = $1`,
+    [invite.id]
+  );
+
+  await logAudit(user.id, 'importer_invite_revoked', importer.id, {
+    inviteId: invite.id,
+    revokedEmail: invite.email,
+  });
+
+  res.json({ success: true });
+});
 
 /**
  * GET /admin/importers/metrics
@@ -1009,6 +1261,12 @@ importersRouter.post('/:id/upload-tariff-csv', async (req: Request, res: Respons
     return;
   }
 
+  const memberRole = await getMemberRoleFor(req, importer.id);
+  if (memberRole === 'viewer') {
+    res.status(403).json({ error: 'viewer role cannot perform tariff uploads' });
+    return;
+  }
+
   // #229: block tariff-driven collateral requirement changes until KYC is approved.
   if (importer.kyc_status !== 'approved') {
     res.status(403).json({
@@ -1270,6 +1528,12 @@ importersRouter.post('/:id/deposit', async (req: Request, res: Response) => {
     return;
   }
 
+  const memberRole = await getMemberRoleFor(req, importer.id);
+  if (memberRole === 'viewer') {
+    res.status(403).json({ error: 'viewer role cannot perform deposits' });
+    return;
+  }
+
   // #312: block collateral deposits until KYC is approved (CIP compliance)
   if (importer.kyc_status !== 'approved') {
     res.status(403).json({
@@ -1319,6 +1583,12 @@ importersRouter.post('/:id/auto-top-up', async (req: Request, res: Response) => 
   const importer = await loadImporterFor(req, String(req.params.id ?? ''));
   if (!importer) {
     res.status(404).json({ error: 'not found' });
+    return;
+  }
+
+  const memberRole = await getMemberRoleFor(req, importer.id);
+  if (memberRole === 'viewer') {
+    res.status(403).json({ error: 'viewer role cannot perform auto-top-up' });
     return;
   }
 
@@ -1616,6 +1886,12 @@ importersRouter.post('/:id/withdraw', async (req: Request, res: Response) => {
   const importer = await loadImporterFor(req, String(req.params.id ?? ''));
   if (!importer) {
     res.status(404).json({ error: 'not found' });
+    return;
+  }
+
+  const memberRole = await getMemberRoleFor(req, importer.id);
+  if (memberRole === 'viewer') {
+    res.status(403).json({ error: 'viewer role cannot execute withdrawals' });
     return;
   }
 

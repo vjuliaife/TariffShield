@@ -69,6 +69,8 @@ export interface AuthPayload {
   email: string;
   role: 'importer' | 'surety_admin';
   sessionId?: string;
+  importerId?: string;
+  importerRole?: 'owner' | 'admin' | 'finance' | 'viewer';
 }
 
 export interface AuthedRequest extends Request {
