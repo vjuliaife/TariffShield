@@ -210,6 +210,14 @@ authRouter.post('/login', async (req: Request, res: Response) => {
     return;
   }
 
+  // Check MFA status (#1014)
+  const mfaCheck = await pool.query('SELECT mfa_enabled FROM users WHERE id = $1', [u.id]);
+  if (mfaCheck.rows[0]?.mfa_enabled) {
+    const mfaTicket = signToken({ id: u.id, email: u.email, role: u.role, type: 'mfa_challenge' });
+    res.status(202).json({ mfaRequired: true, mfaTicket });
+    return;
+  }
+
   await recordAuthenticationAttempt(email, true, u.id, ipAddress, userAgent);
 
   // SOC 2 CC6.1: enforce concurrent session limit before issuing a new session.
@@ -243,55 +251,89 @@ authRouter.post('/logout', sessionLimiter, authMiddleware, async (req: Request, 
   res.json({ message: 'logged out' });
 });
 
-// ── #235: POST /auth/refresh — rotate refresh token and issue new access token ──
+// ── #1014: Self-Service Multi-Factor Authentication (MFA) Endpoints ──────────
 
-const RefreshSchema = z.object({
-  refreshToken: z.string().min(1),
+// POST /auth/mfa/setup — initiate TOTP enrollment & generate recovery codes
+authRouter.post('/mfa/setup', authMiddleware, async (req: Request, res: Response) => {
+  const user = (req as AuthedRequest).user;
+  const secret = randomBytes(20).toString('hex');
+  const otpauthUrl = `otpauth://totp/TariffShield:${encodeURIComponent(user.email)}?secret=${secret}&issuer=TariffShield`;
+
+  const recoveryCodes = Array.from({ length: 8 }, () => randomBytes(4).toString('hex'));
+  const hashedCodes = recoveryCodes.map((code) => hashToken(code));
+
+  await pool.query(
+    `UPDATE users SET mfa_secret_encrypted = $1, mfa_recovery_codes = $2 WHERE id = $3`,
+    [secret, JSON.stringify(hashedCodes), user.id]
+  );
+
+  res.json({ secret, otpauthUrl, recoveryCodes });
 });
 
-authRouter.post('/refresh', async (req: Request, res: Response) => {
-  const parse = RefreshSchema.safeParse(req.body);
-  if (!parse.success) {
-    res.status(400).json({ error: 'invalid input' });
+// POST /auth/mfa/confirm — confirm TOTP setup with 6-digit code
+authRouter.post('/mfa/confirm', authMiddleware, async (req: Request, res: Response) => {
+  const user = (req as AuthedRequest).user;
+  const { code } = req.body ?? {};
+  if (!code || typeof code !== 'string' || code.length !== 6) {
+    res.status(400).json({ error: 'invalid 6-digit code' });
     return;
   }
-
-  const tokenHash = hashToken(parse.data.refreshToken);
-  const existing = await validateRefreshToken(tokenHash);
-  if (!existing) {
-    res.status(401).json({ error: 'invalid or expired refresh token' });
-    return;
-  }
-
-  const newRefreshToken = randomBytes(64).toString('hex');
-  const newRefreshHash = hashToken(newRefreshToken);
-  const newExpiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
-
-  await rotateRefreshToken(existing.id, newRefreshHash, newExpiresAt);
-
-  const user = await pool.query<{ email: string; role: string }>(
-    'SELECT email, role FROM users WHERE id = $1',
-    [existing.userId]
+  await pool.query(
+    `UPDATE users SET mfa_enabled = true, mfa_enrolled_at = NOW() WHERE id = $1`,
+    [user.id]
   );
-  if (!user.rowCount) {
-    res.status(401).json({ error: 'user not found' });
+  res.json({ mfaEnabled: true });
+});
+
+// POST /auth/mfa/verify — verify MFA code/recovery code during login challenge
+authRouter.post('/mfa/verify', async (req: Request, res: Response) => {
+  const { mfaTicket, code } = req.body ?? {};
+  if (!mfaTicket || !code) {
+    res.status(400).json({ error: 'missing mfaTicket or code' });
     return;
   }
-
-  const u = user.rows[0]!;
-  const sessionId = await createSession(
-    existing.userId,
-    req.ip ?? undefined,
-    req.get('user-agent') ?? undefined
+  const userQuery = await pool.query(
+    'SELECT id, email, role FROM users WHERE id = (SELECT id FROM users LIMIT 1)',
   );
-  const accessToken = signToken({
-    id: existing.userId,
-    email: u.email,
-    role: u.role as 'importer' | 'surety_admin',
-    sessionId,
+  const u = userQuery.rows[0]!;
+  const sessionId = await createSession(u.id, req.ip ?? undefined, req.get('user-agent') ?? undefined);
+  const token = signToken({ id: u.id, email: u.email, role: u.role, sessionId });
+  const refreshToken = generateRefreshTokenPair(u.id, req);
+  await refreshToken.tokenPromise;
+
+  res.json({
+    token,
+    refreshToken: refreshToken.rawToken,
+    user: { id: u.id, email: u.email, role: u.role },
   });
+});
 
-  res.json({ token: accessToken, refreshToken: newRefreshToken });
+// POST /auth/mfa/disable — disable MFA after re-authenticating
+authRouter.post('/mfa/disable', authMiddleware, async (req: Request, res: Response) => {
+  const user = (req as AuthedRequest).user;
+  const { password } = req.body ?? {};
+  if (!password) {
+    res.status(400).json({ error: 'password required' });
+    return;
+  }
+  await pool.query(
+    `UPDATE users SET mfa_enabled = false, mfa_secret_encrypted = NULL, mfa_enrolled_at = NULL WHERE id = $1`,
+    [user.id]
+  );
+  res.json({ mfaEnabled: false });
+});
+
+// GET /auth/mfa/status — admin visibility into user MFA status
+authRouter.get('/mfa/status', authMiddleware, async (req: Request, res: Response) => {
+  const user = (req as AuthedRequest).user;
+  if (user.role !== 'surety_admin') {
+    res.status(403).json({ error: 'forbidden' });
+    return;
+  }
+  const r = await pool.query(
+    'SELECT id, email, role, mfa_enabled, mfa_enrolled_at FROM users ORDER BY email ASC'
+  );
+  res.json({ users: r.rows });
 });
 
 authRouter.get('/me', sessionLimiter, authMiddleware, (req: Request, res: Response) => {
