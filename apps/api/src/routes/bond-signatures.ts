@@ -222,33 +222,123 @@ bondWebhookRouter.post('/bonds/docusign-webhook', async (req: Request, res: Resp
   res.status(200).json({ received: true });
 });
 
-// POST /api/v1/bonds/:id/send-reminder — email reminder for unsigned envelope
-bondSignaturesRouter.post(
-  '/bonds/:id/send-reminder',
+  }
+);
+
+// #1022: GET /api/v1/bonds/:id/reminders — view reminder history for a bond (surety_admin)
+bondSignaturesRouter.get(
+  '/bonds/:id/reminders',
   requireRole('surety_admin'),
   async (req: Request, res: Response) => {
     const bondRecordId = req.params.id!;
-    const sig = await pool.query(
-      `SELECT id, envelope_id, status, created_at, last_reminder_sent_at
-       FROM bond_signatures WHERE bond_record_id = $1 AND status = 'sent'
-       ORDER BY created_at DESC LIMIT 1`,
+    const reminders = await pool.query(
+      `SELECT r.id, r.envelope_id, r.reminder_number, r.recipient_email, r.sent_at, r.status
+       FROM bond_signature_reminders r
+       WHERE r.bond_record_id = $1
+       ORDER BY r.sent_at DESC`,
       [bondRecordId]
     );
-    if (!sig.rowCount) {
-      res.status(404).json({ error: 'no pending envelope found for this bond' });
-      return;
-    }
-
-    const envelope = sig.rows[0]!;
-    const hoursSinceCreated = (Date.now() - new Date(envelope.created_at).getTime()) / 3_600_000;
-    if (hoursSinceCreated < 72) {
-      // Send reminder stub — in production call DocuSign resend API
-      await pool.query('UPDATE bond_signatures SET last_reminder_sent_at = now() WHERE id = $1', [
-        envelope.id,
-      ]);
-      res.json({ reminded: true, envelopeId: envelope.envelope_id });
-    } else {
-      res.status(410).json({ error: '72-hour signing deadline has passed; void and reissue' });
-    }
+    res.json({ reminders: reminders.rows });
   }
 );
+
+// #1022: GET /api/v1/bonds/reminder-config — get configurable reminder cadence (surety_admin)
+bondSignaturesRouter.get(
+  '/bonds/reminder-config',
+  requireRole('surety_admin'),
+  async (req: Request, res: Response) => {
+    const user = (req as AuthedRequest).user;
+    const config = await pool.query(
+      'SELECT cadence_days, is_enabled FROM bond_signature_reminder_configs WHERE surety_id = $1',
+      [user.id]
+    );
+    if (!config.rowCount) {
+      res.json({ config: { cadenceDays: [2, 5, 7], isEnabled: true } });
+      return;
+    }
+    res.json({
+      config: {
+        cadenceDays: config.rows[0].cadence_days,
+        isEnabled: config.rows[0].is_enabled,
+      },
+    });
+  }
+);
+
+// #1022: PUT /api/v1/bonds/reminder-config — update configurable reminder cadence (surety_admin)
+bondSignaturesRouter.put(
+  '/bonds/reminder-config',
+  requireRole('surety_admin'),
+  async (req: Request, res: Response) => {
+    const user = (req as AuthedRequest).user;
+    const { cadenceDays, isEnabled } = req.body ?? {};
+    if (!Array.isArray(cadenceDays) || cadenceDays.some((d: any) => typeof d !== 'number' || d <= 0)) {
+      res.status(400).json({ error: 'invalid cadenceDays array' });
+      return;
+    }
+    const upserted = await pool.query(
+      `INSERT INTO bond_signature_reminder_configs (surety_id, cadence_days, is_enabled, updated_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (surety_id) DO UPDATE
+         SET cadence_days = EXCLUDED.cadence_days,
+             is_enabled = EXCLUDED.is_enabled,
+             updated_at = NOW()
+       RETURNING cadence_days, is_enabled`,
+      [user.id, cadenceDays, isEnabled ?? true]
+    );
+    res.json({
+      config: {
+        cadenceDays: upserted.rows[0].cadence_days,
+        isEnabled: upserted.rows[0].is_enabled,
+      },
+    });
+  }
+);
+
+// #1022: Automated reminder sequence polling worker for outstanding signature requests
+export async function processPendingSignatureReminders(): Promise<{ processedCount: number }> {
+  const pending = await pool.query(
+    `SELECT bs.id AS sig_id, bs.bond_record_id, bs.envelope_id, bs.created_at, bs.last_reminder_sent_at,
+            br.importer_id, u.id AS importer_user_id, u.email AS importer_email
+     FROM bond_signatures bs
+     JOIN bond_records br ON br.id = bs.bond_record_id
+     JOIN importers i ON i.id = br.importer_id
+     JOIN users u ON u.id = i.user_id
+     WHERE bs.status = 'sent' AND br.signature_status = 'sent'`
+  );
+
+  let processedCount = 0;
+  for (const row of pending.rows) {
+    const daysSinceCreated = (Date.now() - new Date(row.created_at).getTime()) / (1000 * 60 * 60 * 24);
+    const sentCountRes = await pool.query(
+      'SELECT COUNT(*)::int AS count FROM bond_signature_reminders WHERE bond_record_id = $1',
+      [row.bond_record_id]
+    );
+    const sentCount = sentCountRes.rows[0]?.count ?? 0;
+    const defaultCadence = [2, 5, 7];
+
+    if (sentCount < defaultCadence.length) {
+      const targetThresholdDays = defaultCadence[sentCount]!;
+      if (daysSinceCreated >= targetThresholdDays) {
+        const reminderNum = sentCount + 1;
+        await pool.query(
+          'INSERT INTO bond_signature_reminders (bond_record_id, envelope_id, reminder_number, recipient_email) VALUES ($1, $2, $3, $4)',
+          [row.bond_record_id, row.envelope_id, reminderNum, row.importer_email]
+        );
+        await pool.query('UPDATE bond_signatures SET last_reminder_sent_at = NOW() WHERE id = $1', [row.sig_id]);
+
+        await pool.query(
+          `INSERT INTO notifications (user_id, kind, message) VALUES ($1, $2, $3)`,
+          [
+            row.importer_user_id,
+            'BOND_SIGNATURE_REMINDER',
+            `Reminder #${reminderNum}: You have an unsigned customs bond signature pending. Please review and sign your envelope.`,
+          ]
+        );
+        processedCount++;
+      }
+    }
+  }
+  return { processedCount };
+}
+
