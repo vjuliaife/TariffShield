@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import {
   Address,
   Contract,
@@ -135,7 +136,52 @@ export class TariffShieldApiClient {
       method: 'POST',
     });
   }
+
+  async createWebhookSubscription(importerId: string, data: { targetUrl: string; eventTypes: string[] }) {
+    return this.request(`/importers/${importerId}/webhooks`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async listWebhookSubscriptions(importerId: string) {
+    return this.request(`/importers/${importerId}/webhooks`);
+  }
+
+  async deleteWebhookSubscription(importerId: string, subId: string) {
+    return this.request(`/importers/${importerId}/webhooks/${subId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async getWebhookDeliveryLogs(importerId: string, subId: string) {
+    return this.request(`/importers/${importerId}/webhooks/${subId}/logs`);
+  }
 }
+
+export function verifyWebhookSignature(
+  rawPayload: string,
+  headerSignature: string,
+  secretKey: string
+): boolean {
+  if (!headerSignature || !secretKey) return false;
+  const parts = headerSignature.split(',');
+  const timestampPart = parts.find((p) => p.startsWith('t='));
+  const signaturePart = parts.find((p) => p.startsWith('v1='));
+
+  if (!timestampPart || !signaturePart) return false;
+
+  const timestamp = timestampPart.split('=')[1];
+  const expectedSig = signaturePart.split('=')[1];
+
+  const computedSig = crypto
+    .createHmac('sha256', secretKey)
+    .update(`${timestamp}.${rawPayload}`)
+    .digest('hex');
+
+  return crypto.timingSafeEqual(Buffer.from(computedSig), Buffer.from(expectedSig));
+}
+
 
 export interface TariffShieldClientOptions {
   rpcUrl?: string;
