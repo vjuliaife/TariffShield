@@ -52,6 +52,11 @@ import {
   type OnChainAccountView,
 } from '../cache.js';
 import { computeNextRunAt } from '../services/deposit-schedules.js';
+import {
+  ALLOWED_WEBHOOK_EVENT_TYPES,
+  generateWebhookSecret,
+  type WebhookEventType,
+} from '../services/webhooks.js';
 
 export const importersRouter = Router();
 importersRouter.use(authMiddleware);
@@ -3759,3 +3764,184 @@ importersRouter.get('/:id/peer-benchmark', async (req: Request, res: Response) =
     res.status(500).json({ error: 'failed to calculate peer benchmark' });
   }
 });
+
+
+// ── Webhook Subscriptions & Delivery Logs Management (#1023) ────────────────
+
+const CreateWebhookSubscriptionSchema = z.object({
+  targetUrl: z.string().url(),
+  eventTypes: z.array(z.enum(['deposit', 'top_up', 'clawback'])).min(1),
+});
+
+// POST /importers/:id/webhook-subscriptions — Register a new webhook endpoint
+importersRouter.post('/:id/webhook-subscriptions', async (req: Request, res: Response) => {
+  const importerId = String(req.params.id ?? '');
+  const importer = await loadImporterFor(req, importerId);
+  if (!importer) {
+    res.status(404).json({ error: 'importer not found' });
+    return;
+  }
+
+  const parse = CreateWebhookSubscriptionSchema.safeParse(req.body);
+  if (!parse.success) {
+    res.status(400).json({ error: 'invalid input', target: 'body', details: parse.error.issues });
+    return;
+  }
+
+  const { targetUrl, eventTypes } = parse.data;
+  const secret = generateWebhookSecret();
+
+  try {
+    const inserted = await pool.query(
+      `INSERT INTO webhook_subscriptions (importer_id, target_url, secret, event_types)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, importer_id, target_url, secret, event_types, is_active, created_at, updated_at`,
+      [importerId, targetUrl, secret, eventTypes]
+    );
+
+    const sub = inserted.rows[0];
+    res.status(201).json({
+      subscription: {
+        id: sub.id,
+        importerId: sub.importer_id,
+        targetUrl: sub.target_url,
+        secret: sub.secret,
+        eventTypes: sub.event_types,
+        isActive: sub.is_active,
+        createdAt: sub.created_at,
+        updatedAt: sub.updated_at,
+      },
+    });
+  } catch (err: any) {
+    console.error('[importers] failed to create webhook subscription:', err);
+    res.status(500).json({ error: 'failed to create webhook subscription' });
+  }
+});
+
+// GET /importers/:id/webhook-subscriptions — List webhook subscriptions for an importer
+importersRouter.get('/:id/webhook-subscriptions', async (req: Request, res: Response) => {
+  const importerId = String(req.params.id ?? '');
+  const importer = await loadImporterFor(req, importerId);
+  if (!importer) {
+    res.status(404).json({ error: 'importer not found' });
+    return;
+  }
+
+  const eventTypeFilter = req.query.eventType ? String(req.query.eventType) : null;
+
+  try {
+    const query = eventTypeFilter
+      ? `SELECT id, importer_id, target_url, secret, event_types, is_active, created_at, updated_at
+         FROM webhook_subscriptions
+         WHERE importer_id = $1 AND $2 = ANY(event_types)
+         ORDER BY created_at DESC`
+      : `SELECT id, importer_id, target_url, secret, event_types, is_active, created_at, updated_at
+         FROM webhook_subscriptions
+         WHERE importer_id = $1
+         ORDER BY created_at DESC`;
+
+    const params = eventTypeFilter ? [importerId, eventTypeFilter] : [importerId];
+    const rows = await pool.query(query, params);
+
+    res.json({
+      subscriptions: rows.rows.map((sub) => ({
+        id: sub.id,
+        importerId: sub.importer_id,
+        targetUrl: sub.target_url,
+        secret: sub.secret,
+        eventTypes: sub.event_types,
+        isActive: sub.is_active,
+        createdAt: sub.created_at,
+        updatedAt: sub.updated_at,
+      })),
+    });
+  } catch (err: any) {
+    console.error('[importers] failed to list webhook subscriptions:', err);
+    res.status(500).json({ error: 'failed to list webhook subscriptions' });
+  }
+});
+
+// DELETE /importers/:id/webhook-subscriptions/:subId — Delete a webhook subscription
+importersRouter.delete('/:id/webhook-subscriptions/:subId', async (req: Request, res: Response) => {
+  const importerId = String(req.params.id ?? '');
+  const subId = String(req.params.subId ?? '');
+
+  const importer = await loadImporterFor(req, importerId);
+  if (!importer) {
+    res.status(404).json({ error: 'importer not found' });
+    return;
+  }
+
+  try {
+    const delRes = await pool.query(
+      `DELETE FROM webhook_subscriptions WHERE id = $1 AND importer_id = $2`,
+      [subId, importerId]
+    );
+
+    if (!delRes.rowCount || delRes.rowCount === 0) {
+      res.status(404).json({ error: 'webhook subscription not found' });
+      return;
+    }
+
+    res.json({ success: true, deletedId: subId });
+  } catch (err: any) {
+    console.error('[importers] failed to delete webhook subscription:', err);
+    res.status(500).json({ error: 'failed to delete webhook subscription' });
+  }
+});
+
+// GET /importers/:id/webhook-deliveries — View webhook delivery history/logs
+importersRouter.get('/:id/webhook-deliveries', async (req: Request, res: Response) => {
+  const importerId = String(req.params.id ?? '');
+  const importer = await loadImporterFor(req, importerId);
+  if (!importer) {
+    res.status(404).json({ error: 'importer not found' });
+    return;
+  }
+
+  const subIdFilter = req.query.subscriptionId ? String(req.query.subscriptionId) : null;
+  const limit = Math.min(Math.max(Number(req.query.limit || 20), 1), 100);
+
+  try {
+    const conditions = ['importer_id = $1'];
+    const params: any[] = [importerId];
+
+    if (subIdFilter) {
+      params.push(subIdFilter);
+      conditions.push(`subscription_id = $${params.length}`);
+    }
+
+    params.push(limit);
+    const rows = await pool.query(
+      `SELECT id, subscription_id, importer_id, event_type, payload, attempt_number,
+              status_code, response_body, error_message, delivered_at, next_retry_at, status, created_at
+       FROM webhook_deliveries
+       WHERE ${conditions.join(' AND ')}
+       ORDER BY created_at DESC, id DESC
+       LIMIT $${params.length}`,
+      params
+    );
+
+    res.json({
+      deliveries: rows.rows.map((d) => ({
+        id: d.id,
+        subscriptionId: d.subscription_id,
+        importerId: d.importer_id,
+        eventType: d.event_type,
+        payload: typeof d.payload === 'string' ? JSON.parse(d.payload) : d.payload,
+        attemptNumber: d.attempt_number,
+        statusCode: d.status_code,
+        responseBody: d.response_body,
+        errorMessage: d.error_message,
+        deliveredAt: d.delivered_at,
+        nextRetryAt: d.next_retry_at,
+        status: d.status,
+        createdAt: d.created_at,
+      })),
+    });
+  } catch (err: any) {
+    console.error('[importers] failed to list webhook deliveries:', err);
+    res.status(500).json({ error: 'failed to list webhook deliveries' });
+  }
+});
+
