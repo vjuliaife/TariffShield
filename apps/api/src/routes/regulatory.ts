@@ -125,11 +125,13 @@ regulatoryRouter.get('/state-report/:state_code', async (req: Request, res: Resp
   // 4. Data aggregation queries covering the reporting period:
   // a) Total bonds written and aggregate face value in target state
   const bondsQuery = await pool.query<{ total_bonds: string; aggregate_face_value: string }>(
-    `SELECT COUNT(*)::text as total_bonds, COALESCE(SUM(bond_amount), 0)::text as aggregate_face_value
-     FROM bond_records
-     WHERE state_code = $1
-       AND effective_date >= $2
-       AND effective_date <= $3`,
+    `SELECT COUNT(*)::text as total_bonds, COALESCE(SUM(br.bond_amount), 0)::text as aggregate_face_value
+     FROM bond_records br
+     JOIN importers i ON i.id = br.importer_id
+     WHERE br.state_code = $1
+       AND COALESCE(i.is_sandbox, false) = false
+       AND br.effective_date >= $2
+       AND br.effective_date <= $3`,
     [stateCode, startDate, endDate]
   );
 
@@ -144,6 +146,7 @@ regulatoryRouter.get('/state-report/:state_code', async (req: Request, res: Resp
      JOIN bond_records br ON br.importer_id = i.id
      WHERE ce.kind = 'clawback'
        AND br.state_code = $1
+       AND COALESCE(i.is_sandbox, false) = false
        AND ce.created_at >= $2
        AND ce.created_at <= $3`,
     [stateCode, startDate, endDate]
@@ -156,6 +159,7 @@ regulatoryRouter.get('/state-report/:state_code', async (req: Request, res: Resp
      FROM importers i
      JOIN bond_records br ON br.importer_id = i.id
      WHERE br.state_code = $1
+       AND COALESCE(i.is_sandbox, false) = false
        AND br.effective_date >= $2
        AND br.effective_date <= $3`,
     [stateCode, startDate, endDate]
@@ -168,6 +172,7 @@ regulatoryRouter.get('/state-report/:state_code', async (req: Request, res: Resp
      FROM importers i
      JOIN bond_records br ON br.importer_id = i.id
      WHERE br.state_code = $1
+       AND COALESCE(i.is_sandbox, false) = false
        AND br.effective_date >= $2
        AND br.effective_date <= $3
      GROUP BY COALESCE(i.business_state, 'UNKNOWN')`,
