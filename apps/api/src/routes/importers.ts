@@ -3682,3 +3682,233 @@ importersRouter.get('/:id/tariff-history', async (req: Request, res: Response) =
   }
 });
 
+// ── Webhook Subscriptions Management (#1023) ─────────────────────────────────
+
+const WebhookSubscriptionSchema = z.object({
+  targetUrl: z.string().url(),
+  eventTypes: z.array(z.enum(['deposit', 'top_up', 'clawback', 'all'])).min(1),
+});
+
+// POST /importers/:id/webhooks — Register new webhook subscription
+importersRouter.post('/:id/webhooks', async (req: Request, res: Response) => {
+  const importerId = String(req.params.id ?? '');
+  const importer = await loadImporterFor(req, importerId);
+  if (!importer) {
+    res.status(404).json({ error: 'importer not found' });
+    return;
+  }
+
+  const parse = WebhookSubscriptionSchema.safeParse(req.body);
+  if (!parse.success) {
+    res.status(400).json({ error: 'invalid input', target: 'body', details: parse.error.issues });
+    return;
+  }
+
+  const { targetUrl, eventTypes } = parse.data;
+  const secretKey = `whsec_${createHash('sha256').update(`${importerId}-${Date.now()}-${Math.random()}`).digest('hex').substring(0, 32)}`;
+
+  try {
+    const result = await pool.query(
+      `INSERT INTO webhook_subscriptions (importer_id, target_url, event_types, secret_key)
+       VALUES ($1, $2, $3::jsonb, $4)
+       RETURNING id, importer_id, target_url, event_types, secret_key, is_active, created_at`,
+      [importerId, targetUrl, JSON.stringify(eventTypes), secretKey]
+    );
+
+    const user = (req as AuthedRequest).user;
+    await logAudit(user.id, 'webhook_subscription_created', importerId, {
+      subscriptionId: result.rows[0].id,
+      targetUrl,
+    });
+
+    res.status(201).json({ subscription: result.rows[0] });
+  } catch (err: any) {
+    console.error('[importers] failed to create webhook subscription:', err);
+    res.status(500).json({ error: 'failed to create webhook subscription' });
+  }
+});
+
+// GET /importers/:id/webhooks — List webhook subscriptions
+importersRouter.get('/:id/webhooks', async (req: Request, res: Response) => {
+  const importerId = String(req.params.id ?? '');
+  const importer = await loadImporterFor(req, importerId);
+  if (!importer) {
+    res.status(404).json({ error: 'importer not found' });
+    return;
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT id, target_url, event_types, is_active, created_at
+       FROM webhook_subscriptions
+       WHERE importer_id = $1
+       ORDER BY created_at DESC`,
+      [importerId]
+    );
+
+    res.json({ subscriptions: result.rows });
+  } catch (err: any) {
+    console.error('[importers] failed to list webhook subscriptions:', err);
+    res.status(500).json({ error: 'failed to list webhook subscriptions' });
+  }
+});
+
+// DELETE /importers/:id/webhooks/:subId — Delete webhook subscription
+importersRouter.delete('/:id/webhooks/:subId', async (req: Request, res: Response) => {
+  const importerId = String(req.params.id ?? '');
+  const subId = String(req.params.subId ?? '');
+  const importer = await loadImporterFor(req, importerId);
+  if (!importer) {
+    res.status(404).json({ error: 'importer not found' });
+    return;
+  }
+
+  try {
+    const result = await pool.query(
+      `DELETE FROM webhook_subscriptions
+       WHERE id = $1 AND importer_id = $2
+       RETURNING id`,
+      [subId, importerId]
+    );
+
+    if (!result.rowCount) {
+      res.status(404).json({ error: 'webhook subscription not found' });
+      return;
+    }
+
+    const user = (req as AuthedRequest).user;
+    await logAudit(user.id, 'webhook_subscription_deleted', importerId, { subId });
+
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error('[importers] failed to delete webhook subscription:', err);
+    res.status(500).json({ error: 'failed to delete webhook subscription' });
+  }
+});
+
+// GET /importers/:id/webhooks/:subId/logs — Delivery history log
+importersRouter.get('/:id/webhooks/:subId/logs', async (req: Request, res: Response) => {
+  const importerId = String(req.params.id ?? '');
+  const subId = String(req.params.subId ?? '');
+  const importer = await loadImporterFor(req, importerId);
+  if (!importer) {
+    res.status(404).json({ error: 'importer not found' });
+    return;
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT id, event_type, payload, status_code, response_body, attempt_count, status, created_at
+       FROM webhook_delivery_logs
+       WHERE subscription_id = $1 AND importer_id = $2
+       ORDER BY created_at DESC
+       LIMIT 100`,
+      [subId, importerId]
+    );
+
+    res.json({ logs: result.rows });
+  } catch (err: any) {
+    console.error('[importers] failed to query webhook delivery logs:', err);
+    res.status(500).json({ error: 'failed to query delivery logs' });
+  }
+});
+
+export async function dispatchWebhookEvent(importerId: string, eventType: string, payload: Record<string, unknown>) {
+  try {
+    const subs = await pool.query(
+      `SELECT id, target_url, secret_key, event_types
+       FROM webhook_subscriptions
+       WHERE importer_id = $1 AND is_active = TRUE`,
+      [importerId]
+    );
+
+    for (const sub of subs.rows) {
+      const eventTypes: string[] = sub.event_types;
+      if (!eventTypes.includes('all') && !eventTypes.includes(eventType)) {
+        continue;
+      }
+
+      const timestamp = Math.floor(Date.now() / 1000);
+      const serializedPayload = JSON.stringify({ event: eventType, timestamp, data: payload });
+      const signature = createHash('sha256')
+        .update(`${timestamp}.${serializedPayload}.${sub.secret_key}`)
+        .digest('hex');
+
+      executeWebhookDeliveryWithBackoff(sub.id, importerId, eventType, sub.target_url, serializedPayload, signature, 1);
+    }
+  } catch (err: any) {
+    console.error('[importers] failed to dispatch webhook event:', err);
+  }
+}
+
+async function executeWebhookDeliveryWithBackoff(
+  subscriptionId: string,
+  importerId: string,
+  eventType: string,
+  targetUrl: string,
+  body: string,
+  signature: string,
+  attempt: number
+) {
+  const maxAttempts = 5;
+  try {
+    const response = await fetch(targetUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-TariffShield-Signature': `t=${Math.floor(Date.now() / 1000)},v1=${signature}`,
+      },
+      body,
+      signal: AbortSignal.timeout(5000),
+    });
+
+    const respText = await response.text().catch(() => '');
+    const isSuccess = response.ok;
+
+    await pool.query(
+      `INSERT INTO webhook_delivery_logs (subscription_id, importer_id, event_type, payload, status_code, response_body, attempt_count, status)
+       VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8)`,
+      [
+        subscriptionId,
+        importerId,
+        eventType,
+        body,
+        response.status,
+        respText.substring(0, 1000),
+        attempt,
+        isSuccess ? 'delivered' : attempt >= maxAttempts ? 'failed' : 'pending',
+      ]
+    );
+
+    if (!isSuccess && attempt < maxAttempts) {
+      const backoffMs = Math.pow(2, attempt) * 1000 + Math.random() * 500;
+      setTimeout(() => {
+        executeWebhookDeliveryWithBackoff(subscriptionId, importerId, eventType, targetUrl, body, signature, attempt + 1);
+      }, backoffMs);
+    }
+  } catch (err: any) {
+    await pool.query(
+      `INSERT INTO webhook_delivery_logs (subscription_id, importer_id, event_type, payload, status_code, response_body, attempt_count, status)
+       VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8)`,
+      [
+        subscriptionId,
+        importerId,
+        eventType,
+        body,
+        500,
+        err.message || 'Network error',
+        attempt,
+        attempt >= maxAttempts ? 'failed' : 'pending',
+      ]
+    );
+
+    if (attempt < maxAttempts) {
+      const backoffMs = Math.pow(2, attempt) * 1000 + Math.random() * 500;
+      setTimeout(() => {
+        executeWebhookDeliveryWithBackoff(subscriptionId, importerId, eventType, targetUrl, body, signature, attempt + 1);
+      }, backoffMs);
+    }
+  }
+}
+
+
