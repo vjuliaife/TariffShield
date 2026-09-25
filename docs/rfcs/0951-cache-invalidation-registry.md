@@ -24,18 +24,19 @@ The worker (`queue.ts:181`) runs:
 
 | Method | On-chain effect | Cached field(s) affected | Invalidated by worker? |
 | --- | --- | --- | --- |
-| `register` | creates account | all (`bondId`, balances, required) | **No** |
+| `register` | creates account | all (`bondId`, balances, required) | **No** (no `enqueueTxSubmit` call site found in `routes/` or `services/`) |
 | `deposit` (`collateral` or `reserve` bucket) | +collateral or +reserve | `collateralBalance` or `reserveBalance` | Yes |
 | `auto_top_up` | moves reserve -> collateral | `collateralBalance`, `reserveBalance` | **No** |
 | `withdraw` | -collateral | `collateralBalance` | Yes |
 | `accrue_yield` | +yield | `yieldAccrued` | **No** |
 | `clawback` | zeroes balances, sets flag | balances, `isClawbacked` | Yes |
-| `set_required_collateral` | changes required | `requiredCollateral` | **No** (worker); route invalidates before enqueue |
+| `set_required_collateral` | changes required | `requiredCollateral` | **No** (worker). No enqueue site found; the tariff-upload route calls the contract directly and invalidates at `routes/importers.ts:1485` |
 
-Three write methods that change cached fields (`auto_top_up`, `accrue_yield`,
-`register`) do not invalidate on confirmation, and `set_required_collateral`
-relies on other code paths. A client can read a stale value for up to 30 s
-after `auto_top_up` or `accrue_yield` confirm.
+Four methods that change cached fields (`auto_top_up`, `accrue_yield`,
+`register`, `set_required_collateral`) do not invalidate on confirmation.
+Of these, `auto_top_up` and `accrue_yield` are actually enqueued (`importers.ts:1600`, `:3061`), so a client can read a stale
+value for up to 30 s after either confirms. `register` and
+`set_required_collateral` have worker cases but no enqueue site today, so they are latent: the first caller to enqueue one inherits the bug.
 
 ### Other invalidation sites (outside the worker)
 
@@ -61,7 +62,7 @@ export type CacheEffect =
   | { kind: 'none'; reason: string }; // explicit opt-out, must justify
 
 export const METHOD_CACHE_EFFECTS: Record<Method, readonly CacheEffect[]> = {
-  register:                { ... } ,
+  register:                [{ kind: 'onchain-account' }],
   deposit:                 [{ kind: 'onchain-account' }],
   auto_top_up:             [{ kind: 'onchain-account' }],
   withdraw:                [{ kind: 'onchain-account' }],
@@ -100,7 +101,7 @@ Worker change: replace the `if` at `queue.ts:181` with
 
 1. Add `TX_SUBMIT_METHODS`, derive the union from it, add the registry and its
    test. Populate it as above, **including the four methods currently missing**.
-   This alone fixes the stale-read bug.
+   This alone fixes the stale reads after `auto_top_up`/`accrue_yield`.
 2. Swap the worker's `if` for `applyCacheEffects`; add `assertNever`.
 3. Leave the route-side pre-enqueue invalidation as is (it serves a different
    purpose: clearing before the write is queued); document that in the registry header.
@@ -114,10 +115,10 @@ one Redis call, and it fails open.
 ## 5. Trade-offs
 
 **Registry:** a new method cannot ship without an explicit cache decision;
-fixes 4 real gaps immediately; one table to read when debugging staleness; leaves room for multiple cache keys.
+closes 2 live gaps (`auto_top_up`, `accrue_yield`) and 2 latent ones; one table to read when debugging staleness; leaves room for multiple cache keys.
 
 **Current direct calls:** simplest possible code, no indirection. But the
-audit shows it already drifted (4 of 7 methods).
+audit shows it already drifted (4 of 7 methods lack invalidation).
 
 **Costs:** one more small module; developers must touch it when adding a job
 method (that is the point); the registry says *which* effect, not *whether the
