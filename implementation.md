@@ -296,3 +296,192 @@ CREATE INDEX idx_hts_rate_history_lookup ON hts_rate_history(hts_code, effective
   * Rendering: $O(K)$ canvas/SVG element points.
 * **Space Complexity**: $O(K)$ memory footprint for transmitted time-series points.
 
+---
+
+## 9. Issue #1022: Automated Reminder Sequence for Pending Bond Signatures
+
+### Architecture & System Design
+To address pending DocuSign envelope sign-offs that leave customs bond issuance stalled, we implement an automated, escalating reminder sequence background worker alongside configurable cadence settings and admin tracking interfaces.
+* **Scheduled Reminder Engine**: Polling background service evaluating unsigned envelopes against configurable threshold windows (defaulting to Day 2, Day 5, and Day 7).
+* **Escalating Notifications**: Dispatches notifications via `createNotification` (`apps/api/src/routes/notifications.ts`) with appropriate severity levels based on elapsed days. Automatically terminates when `signature_status` becomes `'completed'`, `'declined'`, or `'voided'`.
+* **Configurable Cadence**: `surety_admin` can adjust reminder thresholds per surety organization or bond type.
+* **History Auditability**: Every reminder event is recorded in `bond_signature_reminders` audit log for surety inspection.
+
+### Database Schema Expansion (`migrations/022_bond_signature_reminders.sql`)
+```sql
+CREATE TABLE bond_signature_reminder_configs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    surety_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    cadence_days INT[] NOT NULL DEFAULT '{2, 5, 7}',
+    is_enabled BOOLEAN NOT NULL DEFAULT true,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT unique_surety_reminder_config UNIQUE (surety_id)
+);
+
+CREATE TABLE bond_signature_reminders (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    bond_record_id UUID NOT NULL REFERENCES bond_records(id) ON DELETE CASCADE,
+    envelope_id VARCHAR(255) NOT NULL,
+    reminder_number INT NOT NULL, -- 1 = Day 2, 2 = Day 5, 3 = Day 7
+    recipient_email VARCHAR(255) NOT NULL,
+    sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    status VARCHAR(50) NOT NULL DEFAULT 'delivered'
+);
+
+CREATE INDEX idx_bond_sig_reminders_bond ON bond_signature_reminders(bond_record_id, sent_at DESC);
+CREATE INDEX idx_pending_signatures ON bond_signatures(status, created_at) WHERE status = 'sent';
+```
+
+### API Implementation (`apps/api/src/routes/bond-signatures.ts`)
+1. **GET `/api/v1/bonds/:id/reminders`**:
+   * Endpoint restricted to `surety_admin`.
+   * Returns historical reminder logs for a specified bond record.
+2. **GET/PUT `/api/v1/bonds/reminder-config`**:
+   * Enables surety admins to read and update cadence arrays (e.g. `[2, 5, 7]`).
+3. **Automated Cron Worker (`processPendingSignatureReminders()`)**:
+   * Queries pending envelopes (`WHERE status = 'sent'`).
+   * For each envelope, calculates elapsed time: $\Delta t = t_{\text{now}} - t_{\text{created}}$.
+   * Evaluates sent count against cadence thresholds; if eligible, dispatches in-app notification & email via `notifications.ts`, updates `last_reminder_sent_at` on `bond_signatures`, and inserts log entry into `bond_signature_reminders`.
+   * Automatically skips envelopes where status has moved to `'completed'`.
+
+### Algorithmic Complexity Analysis
+* **Time Complexity**:
+  * Polling Pending Signatures: $O(P)$ indexed scan on `idx_pending_signatures` where $P$ is the number of active unsigned envelopes.
+  * History Query: $O(\log R + K)$ index lookup on `idx_bond_sig_reminders_bond`.
+* **Space Complexity**: $O(R)$ where $R$ is total historical reminder logs.
+
+---
+
+## 10. Issue #1024: Sandbox / Trial Mode Toggle for Prospective Importer Accounts
+
+### Architecture & System Design
+Prospective importers require a risk-free trial environment to evaluate bond top-ups, collateral management, and duty ingestion without executing live on-chain Stellar transactions or moving real token funds.
+* **Account-Level Sandbox Flag**: `is_sandbox` boolean flag attached to `importers` table.
+* **Simulated Execution Engine**: Intercepts `register_importer`, `deposit_collateral`, `deposit_reserve`, and `withdraw_collateral` for sandbox accounts. Updates local database mirror balances directly without broadcasting Soroban RPC transactions to the Stellar network.
+* **Visual Distinction**: Frontend dashboard highlights Sandbox Mode with prominent warning banners, distinct badges, and trial state indicators.
+* **Live Conversion Workflow**: `surety_admin` or platform admin can execute conversion (`POST /importers/:id/convert-to-live`).
+* **Regulatory Exclusivity**: All queries in `apps/api/src/routes/regulatory.ts` explicitly filter `WHERE i.is_sandbox = false` to guarantee trial data is completely excluded from state regulatory reports, compliance filings, and audit logs.
+
+### Database Schema & Query Isolation (`apps/api/src/routes/regulatory.ts`)
+```sql
+ALTER TABLE importers ADD COLUMN is_sandbox BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE importers ADD COLUMN converted_at TIMESTAMPTZ;
+CREATE INDEX idx_importers_sandbox ON importers(is_sandbox);
+```
+
+In `apps/api/src/routes/regulatory.ts`:
+```sql
+-- Explicitly exclude sandbox importer data from regulatory report calculations
+SELECT COUNT(*)::text as claims_count
+FROM contract_events ce
+JOIN importers i ON ce.importer_id = i.id
+JOIN bond_records br ON br.importer_id = i.id
+WHERE ce.kind = 'clawback'
+  AND br.state_code = $1
+  AND i.is_sandbox = false
+  AND ce.created_at >= $2
+  AND ce.created_at <= $3;
+```
+
+### Contract Simulation Alignment (`contracts/tariff-shield/src/lib.rs`)
+While the Soroban smart contract strictly handles real on-chain token state, the off-chain API layer (`apps/api`) acts as the gateway controller. For `is_sandbox = true` accounts, the API skips contract RPC submission while retaining identical event format mirroring (`contract_events` table) so trial reporting analytics work seamlessly.
+
+### Algorithmic Complexity Analysis
+* **Time Complexity**:
+  * Simulated Deposit/Withdrawal: $O(1)$ atomic PostgreSQL transaction (bypasses 3-5s Soroban RPC consensus latency).
+  * Regulatory Filtering: $O(1)$ overhead utilizing index `idx_importers_sandbox`.
+* **Space Complexity**: $O(S)$ storage for trial importer records.
+
+---
+
+## 11. Issue #1014: Self-Service Multi-Factor Authentication (MFA) Management
+
+### Architecture & System Design
+To secure importer and surety administrator accounts beyond standard password authentication, we implement TOTP-based (Time-based One-Time Password) Multi-Factor Authentication with backup recovery code support.
+* **Standard Compatibility**: Uses RFC 6238 TOTP algorithms (compatible with Google Authenticator, Authy, 1Password).
+* **Enrollment Flow**:
+  1. User requests MFA setup -> API generates secret key & QR code URI (`otpauth://`).
+  2. API generates 8 single-use cryptographic recovery codes (`randomBytes(4).toString('hex')`), hashed via SHA-256 before DB storage.
+  3. User inputs 6-digit TOTP code to confirm setup -> `mfa_enabled` set to `true`.
+* **Login Challenge Enforcement**: `POST /auth/login` checks `mfa_enabled`. If true, returns `202 Accepted` with a transient `mfa_ticket` instead of JWT. User completes authentication at `POST /auth/mfa/verify`.
+* **Disabling MFA**: Requires current password re-authentication and active TOTP code.
+* **Admin Visibility**: `surety_admin` can inspect MFA enrollment status across users (`mfa_enabled`, `mfa_enrolled_at`) for security compliance.
+
+### Database Schema Expansion (`migrations/014_user_mfa.sql`)
+```sql
+ALTER TABLE users ADD COLUMN mfa_enabled BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE users ADD COLUMN mfa_secret_encrypted TEXT;
+ALTER TABLE users ADD COLUMN mfa_enrolled_at TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN mfa_recovery_codes JSONB; -- Array of { code_hash, used_at }
+
+CREATE INDEX idx_users_mfa_status ON users(mfa_enabled);
+```
+
+### Authentication Flow Spec (`apps/api/src/routes/auth.ts`)
+1. **`POST /auth/mfa/setup`** (Authed): Generates TOTP secret & encrypted storage, returns QR code URI + plain recovery codes.
+2. **`POST /auth/mfa/confirm`** (Authed): Validates submitted TOTP token against secret using window $\pm 1$ step (30s). Sets `mfa_enabled = true`.
+3. **`POST /auth/login`** (Extended):
+   ```typescript
+   if (user.mfa_enabled) {
+     const mfaTicket = jwt.sign({ userId: user.id, type: 'mfa_challenge' }, env.JWT_SECRET, { expiresIn: '5m' });
+     return res.status(202).json({ mfaRequired: true, mfaTicket });
+   }
+   ```
+4. **`POST /auth/mfa/verify`**: Validates `mfaTicket` and 6-digit TOTP or recovery code. On match, issues session JWT and refresh token.
+
+### Algorithmic Complexity Analysis
+* **Time Complexity**:
+  * TOTP HMAC-SHA1 Computation: $O(1)$ constant time arithmetic operations over secret key.
+  * Recovery Code Hash Check: $O(C)$ where $C = 8$ recovery codes $\Rightarrow O(1)$.
+* **Space Complexity**: $O(1)$ encrypted secret & recovery hash storage per user.
+
+---
+
+## 12. Issue #1016: In-App Changelog / Release Notes Feed
+
+### Architecture & System Design
+To inform importers and surety admins of new feature rollouts, regulatory updates, and platform changes within the product, we add an in-app changelog panel integrated directly into `Nav.tsx`.
+* **Admin Content Management**: `surety_admin` / platform admin can publish, edit, or archive release notes entries via `/api/v1/changelog`.
+* **Unread Indicator**: `Nav.tsx` polls/fetches the unread changelog count for the logged-in user. Shows a distinct notification badge when unread entries exist (`published_at > last_read_at`).
+* **Interactive Panel**: Clicking the indicator toggles a slide-out drawer listing historical entries sorted by date.
+* **Per-User Read Persistence**: Persists user read state in `user_changelog_reads` table to synchronize unread states across devices.
+* **Rich Text Support**: Entries support Markdown formatting (headings, lists, links) sanitized against XSS attacks.
+
+### Database Schema Expansion (`migrations/016_changelog_feed.sql`)
+```sql
+CREATE TABLE changelog_entries (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    title VARCHAR(255) NOT NULL,
+    version VARCHAR(50),
+    content_markdown TEXT NOT NULL,
+    category VARCHAR(50) NOT NULL DEFAULT 'feature', -- 'feature', 'security', 'compliance', 'maintenance'
+    published_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_by UUID NOT NULL REFERENCES users(id)
+);
+
+CREATE TABLE user_changelog_reads (
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    last_read_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (user_id)
+);
+
+CREATE INDEX idx_changelog_published ON changelog_entries(published_at DESC);
+```
+
+### API Endpoints (`apps/api/src/routes/changelog.ts`)
+* **`GET /api/v1/changelog`** (Authed): Returns recent changelog entries and `unreadCount` calculated by comparing entry timestamps against `user_changelog_reads.last_read_at`.
+* **`POST /api/v1/changelog/read`** (Authed): Updates `user_changelog_reads.last_read_at = NOW()` for the user, clearing the unread badge.
+* **`POST /api/v1/changelog`** (`surety_admin`): Creates a new published changelog entry.
+
+### Frontend Component Integration (`apps/web/components/Nav.tsx`)
+* Added `ChangelogDrawer` entry point icon/badge in the navigation bar.
+* Displays unread badge when `unreadCount > 0`.
+* Seamlessly renders Markdown content using standard React elements with secure link targets (`target="_blank" rel="noopener noreferrer"`).
+
+### Algorithmic Complexity Analysis
+* **Time Complexity**:
+  * Unread Count Computation: $O(\log E)$ index binary search on `idx_changelog_published` where $E$ is total published changelog entries.
+  * Read State Update: $O(1)$ primary key upsert.
+* **Space Complexity**: $O(E)$ memory for changelog feed payload.
+
+
