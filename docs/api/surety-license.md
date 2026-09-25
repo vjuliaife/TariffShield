@@ -77,3 +77,69 @@ curl -X POST "$API_URL/surety-license/submit" \
   "status": "submitted"
 }
 ```
+
+## `GET /surety-license/status`
+
+Returns the caller's own license verification record.
+
+- **Method:** `GET`
+- **Path:** `/surety-license/status`
+- **Auth:** `surety_admin`
+
+### Example request
+
+```bash
+curl "$API_URL/surety-license/status" \
+  -H "Authorization: Bearer $JWT"
+```
+
+### Responses
+
+| Status | Body | When |
+|---|---|---|
+| `200 OK` | `{ "verification": { ... } }` | Record found (any status). |
+| `403 Forbidden` | `{ "error": "surety_admin only" }` | Caller isn't a `surety_admin`. |
+| `404 Not Found` | `{ "error": "no license verification record found" }` | No verification row exists for this user. |
+
+`verification` fields:
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | string (UUID) | |
+| `naic_number` | string \| null | `null` until submitted. |
+| `company_name` | string | Empty string until submitted. |
+| `state_of_domicile` | string | Empty string until submitted. |
+| `am_best_rating` | string \| null | |
+| `status` | string | One of `pending`, `submitted`, `verified`, `rejected` (see [Status values](#status-values)). |
+| `submitted_at` | string (ISO 8601) \| null | Set by `/submit`. |
+| `reviewed_at` | string (ISO 8601) \| null | Set once a platform admin reviews it. |
+| `rejection_reason` | string \| null | Set only when `status` is `rejected`. |
+| `created_at` | string (ISO 8601) | When the record was created (at signup). |
+
+### Status values
+
+| `status` | Meaning |
+|---|---|
+| `pending` | Default at signup — nothing submitted yet. |
+| `submitted` | `/submit` was called; awaiting platform admin review. |
+| `verified` | Approved. License-gated operations are now unblocked. |
+| `rejected` | Rejected. See `rejection_reason`. Calling `/submit` again moves it back to `submitted`. |
+
+### Example response
+
+```json
+{
+  "verification": {
+    "id": "8f14e45f-ceea-4c19-8b5d-4c2c9f3d2b1a",
+    "naic_number": "12345",
+    "company_name": "Acme Surety Co.",
+    "state_of_domicile": "CA",
+    "am_best_rating": "A+",
+    "status": "submitted",
+    "submitted_at": "2026-09-24T14:05:12.310Z",
+    "reviewed_at": null,
+    "rejection_reason": null,
+    "created_at": "2026-09-01T09:00:00.000Z"
+  }
+}
+```
