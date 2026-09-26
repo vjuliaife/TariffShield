@@ -26,7 +26,7 @@ import {
 import { env } from '../config/env.js';
 import { enrollInOnboardingDrip } from '../services/onboarding-drip.js';
 import { logger } from '../lib/logger.js';
-import { createHash, randomBytes } from 'crypto';
+import { createHash, createHmac, randomBytes } from 'crypto';
 
 export const authRouter = Router();
 
@@ -189,7 +189,7 @@ authRouter.post('/login', async (req: Request, res: Response) => {
   }
 
   const r = await pool.query(
-    'SELECT id, email, password_hash, role, locked_until FROM users WHERE email = $1',
+    'SELECT id, email, password_hash, role, locked_until, mfa_enabled, mfa_secret FROM users WHERE email = $1',
     [email]
   );
   if (r.rowCount === 0) {
@@ -210,6 +210,26 @@ authRouter.post('/login', async (req: Request, res: Response) => {
     return;
   }
 
+  // #1014: MFA Challenge check if MFA is enabled on user account
+  if (u.mfa_enabled) {
+    const { mfaCode, recoveryCode } = req.body || {};
+    if (!mfaCode && !recoveryCode) {
+      res.status(200).json({ mfaRequired: true, message: 'MFA code or backup recovery code required' });
+      return;
+    }
+    // Verify TOTP code or recovery code
+    const isTotpValid = mfaCode && verifyTotpCode(u.mfa_secret, String(mfaCode));
+    let isRecoveryValid = false;
+    if (!isTotpValid && recoveryCode) {
+      isRecoveryValid = await verifyAndConsumeRecoveryCode(u.id, String(recoveryCode));
+    }
+    if (!isTotpValid && !isRecoveryValid) {
+      await recordAuthenticationAttempt(email, false, u.id, ipAddress, userAgent);
+      res.status(401).json({ error: 'invalid MFA or recovery code' });
+      return;
+    }
+  }
+
   await recordAuthenticationAttempt(email, true, u.id, ipAddress, userAgent);
 
   // SOC 2 CC6.1: enforce concurrent session limit before issuing a new session.
@@ -227,7 +247,7 @@ authRouter.post('/login', async (req: Request, res: Response) => {
   res.json({
     token,
     refreshToken: refreshToken.rawToken,
-    user: { id: u.id, email: u.email, role: u.role },
+    user: { id: u.id, email: u.email, role: u.role, mfaEnabled: Boolean(u.mfa_enabled) },
   });
 });
 
@@ -567,9 +587,128 @@ authRouter.post('/team-invite/accept', async (req: Request, res: Response) => {
         status: 'active',
       },
     });
-  } catch (err: any) {
-    console.error('[auth] failed to accept team invite:', err);
-    res.status(500).json({ error: 'failed to accept team invite' });
+// ── #1014: TOTP MFA Management & Helper Functions ─────────────────────────
+
+function verifyTotpCode(secret: string | null, code: string): boolean {
+  if (!secret || !code || code.length !== 6) return false;
+  // RFC 6238 TOTP computation (30s window, HMAC-SHA1)
+  const epoch = Math.floor(Date.now() / 1000 / 30);
+  for (let delta = -1; delta <= 1; delta++) {
+    const timeStep = epoch + delta;
+    const buf = Buffer.alloc(8);
+    buf.writeBigInt64BE(BigInt(timeStep), 0);
+    const hmac = createHmac('sha1', Buffer.from(secret, 'hex')).update(buf).digest();
+    const offset = hmac[hmac.length - 1]! & 0xf;
+    const binary =
+      ((hmac[offset]! & 0x7f) << 24) |
+      ((hmac[offset + 1]! & 0xff) << 16) |
+      ((hmac[offset + 2]! & 0xff) << 8) |
+      (hmac[offset + 3]! & 0xff);
+    const generated = (binary % 1000000).toString().padStart(6, '0');
+    if (generated === code.trim()) return true;
   }
+  return false;
+}
+
+async function verifyAndConsumeRecoveryCode(userId: string, code: string): boolean {
+  const codeHash = createHash('sha256').update(code.trim()).digest('hex');
+  const r = await pool.query(
+    'DELETE FROM user_mfa_recovery_codes WHERE user_id = $1 AND code_hash = $2 RETURNING id',
+    [userId, codeHash]
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
+// POST /auth/mfa/setup — Initiate MFA Enrollment
+authRouter.post('/mfa/setup', sessionLimiter, authMiddleware, async (req: Request, res: Response) => {
+  const user = (req as AuthedRequest).user;
+  const secret = randomBytes(20).toString('hex');
+  const otpauthUrl = `otpauth://totp/TariffShield:${encodeURIComponent(user.email)}?secret=${secret}&issuer=TariffShield`;
+
+  // Generate 8 single-use backup recovery codes
+  const recoveryCodes: string[] = [];
+  const codeHashes: string[] = [];
+  for (let i = 0; i < 8; i++) {
+    const code = randomBytes(4).toString('hex').toUpperCase();
+    recoveryCodes.push(code);
+    codeHashes.push(createHash('sha256').update(code).digest('hex'));
+  }
+
+  // Save secret temporarily pending verification
+  await pool.query('UPDATE users SET mfa_secret = $1 WHERE id = $2', [secret, user.id]);
+  await pool.query('DELETE FROM user_mfa_recovery_codes WHERE user_id = $1', [user.id]);
+  for (const hash of codeHashes) {
+    await pool.query('INSERT INTO user_mfa_recovery_codes (user_id, code_hash) VALUES ($1, $2)', [
+      user.id,
+      hash,
+    ]);
+  }
+
+  res.json({ secret, otpauthUrl, recoveryCodes });
+});
+
+// POST /auth/mfa/enable — Verify initial code & activate MFA
+authRouter.post('/mfa/enable', sessionLimiter, authMiddleware, async (req: Request, res: Response) => {
+  const user = (req as AuthedRequest).user;
+  const { code } = req.body || {};
+
+  const u = await pool.query('SELECT mfa_secret FROM users WHERE id = $1', [user.id]);
+  const secret = u.rows[0]?.mfa_secret;
+
+  if (!verifyTotpCode(secret, String(code))) {
+    res.status(400).json({ error: 'invalid verification code' });
+    return;
+  }
+
+  await pool.query('UPDATE users SET mfa_enabled = true WHERE id = $1', [user.id]);
+  res.json({ enabled: true, message: 'MFA successfully enrolled and enabled' });
+});
+
+// POST /auth/mfa/disable — Disable MFA after re-authenticating
+authRouter.post('/mfa/disable', sessionLimiter, authMiddleware, async (req: Request, res: Response) => {
+  const user = (req as AuthedRequest).user;
+  const { password, code } = req.body || {};
+
+  const u = await pool.query('SELECT password_hash, mfa_secret FROM users WHERE id = $1', [user.id]);
+  if (!u.rowCount) {
+    res.status(404).json({ error: 'user not found' });
+    return;
+  }
+
+  const isPasswordOk = await verifyPassword(String(password), u.rows[0].password_hash);
+  const isCodeOk = verifyTotpCode(u.rows[0].mfa_secret, String(code));
+
+  if (!isPasswordOk || !isCodeOk) {
+    res.status(401).json({ error: 'invalid password or MFA code for re-authentication' });
+    return;
+  }
+
+  await pool.query(
+    'UPDATE users SET mfa_enabled = false, mfa_secret = NULL WHERE id = $1',
+    [user.id]
+  );
+  await pool.query('DELETE FROM user_mfa_recovery_codes WHERE user_id = $1', [user.id]);
+
+  res.json({ disabled: true, message: 'MFA successfully disabled' });
+});
+
+// GET /auth/mfa/status — User MFA Status
+authRouter.get('/mfa/status', sessionLimiter, authMiddleware, async (req: Request, res: Response) => {
+  const user = (req as AuthedRequest).user;
+  const u = await pool.query('SELECT mfa_enabled FROM users WHERE id = $1', [user.id]);
+  res.json({ mfaEnabled: Boolean(u.rows[0]?.mfa_enabled) });
+});
+
+// GET /auth/mfa/admin/review — Surety Admin MFA Security Review
+authRouter.get('/mfa/admin/review', sessionLimiter, authMiddleware, async (req: Request, res: Response) => {
+  const user = (req as AuthedRequest).user;
+  if (user.role !== 'surety_admin') {
+    res.status(403).json({ error: 'forbidden' });
+    return;
+  }
+  const result = await pool.query(
+    'SELECT id, email, role, mfa_enabled, created_at FROM users ORDER BY created_at DESC'
+  );
+  res.json({ users: result.rows });
 });
 
