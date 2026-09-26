@@ -223,7 +223,7 @@ bondWebhookRouter.post('/bonds/docusign-webhook', async (req: Request, res: Resp
   res.status(200).json({ received: true });
 });
 
-// POST /api/v1/bonds/:id/send-reminder — email reminder for unsigned envelope
+// POST /api/v1/bonds/:id/send-reminder — manual reminder for unsigned envelope
 bondSignaturesRouter.post(
   '/bonds/:id/send-reminder',
   requireRole('surety_admin'),
@@ -241,16 +241,136 @@ bondSignaturesRouter.post(
     }
 
     const envelope = sig.rows[0]!;
-    const hoursSinceCreated = (Date.now() - new Date(envelope.created_at).getTime()) / 3_600_000;
-    if (hoursSinceCreated < 72) {
-      // Send reminder stub — in production call DocuSign resend API
-      await pool.query('UPDATE bond_signatures SET last_reminder_sent_at = now() WHERE id = $1', [
-        envelope.id,
-      ]);
-      res.json({ reminded: true, envelopeId: envelope.envelope_id });
-    } else {
-      res.status(410).json({ error: '72-hour signing deadline has passed; void and reissue' });
+    await pool.query(
+      'UPDATE bond_signatures SET last_reminder_sent_at = now() WHERE id = $1',
+      [envelope.id]
+    );
+
+    // Record reminder history entry
+    await pool.query(
+      `INSERT INTO bond_signature_reminders_log (bond_record_id, envelope_id, reminder_type, sent_at)
+       VALUES ($1, $2, 'manual', now())`,
+      [bondRecordId, envelope.envelope_id]
+    );
+
+    res.json({ reminded: true, envelopeId: envelope.envelope_id });
+  }
+);
+
+// ── #1022 Automated Escalating Signature Reminders ──────────────────────────
+
+// GET /api/v1/bonds/reminders/config — view reminder cadence configuration
+bondSignaturesRouter.get(
+  '/bonds/reminders/config',
+  requireRole('surety_admin'),
+  async (_req: Request, res: Response) => {
+    const config = await pool.query(
+      'SELECT cadence_days FROM bond_signature_reminder_configs ORDER BY updated_at DESC LIMIT 1'
+    );
+    const cadenceDays = config.rows[0]?.cadence_days ?? [2, 5, 7];
+    res.json({ cadenceDays });
+  }
+);
+
+// PUT /api/v1/bonds/reminders/config — update reminder cadence configuration
+bondSignaturesRouter.put(
+  '/bonds/reminders/config',
+  requireRole('surety_admin'),
+  async (req: Request, res: Response) => {
+    const { cadenceDays } = req.body || {};
+    if (!Array.isArray(cadenceDays) || cadenceDays.some((d) => typeof d !== 'number' || d <= 0)) {
+      res.status(400).json({ error: 'invalid cadence_days array' });
+      return;
     }
+    const sorted = [...cadenceDays].sort((a, b) => a - b);
+    await pool.query(
+      `INSERT INTO bond_signature_reminder_configs (cadence_days, updated_at)
+       VALUES ($1, now())`,
+      [JSON.stringify(sorted)]
+    );
+    res.json({ cadenceDays: sorted });
+  }
+);
+
+// GET /api/v1/bonds/:id/reminder-history — view reminder history for a bond
+bondSignaturesRouter.get(
+  '/bonds/:id/reminder-history',
+  requireRole('surety_admin'),
+  async (req: Request, res: Response) => {
+    const bondRecordId = req.params.id!;
+    const history = await pool.query(
+      `SELECT id, envelope_id, reminder_type, sent_at
+       FROM bond_signature_reminders_log
+       WHERE bond_record_id = $1
+       ORDER BY sent_at DESC`,
+      [bondRecordId]
+    );
+    res.json({ reminderHistory: history.rows });
+  }
+);
+
+// POST /api/v1/bonds/reminders/process — automated job to evaluate pending signature reminders
+bondSignaturesRouter.post(
+  '/bonds/reminders/process',
+  requireRole('surety_admin'),
+  async (_req: Request, res: Response) => {
+    const config = await pool.query(
+      'SELECT cadence_days FROM bond_signature_reminder_configs ORDER BY updated_at DESC LIMIT 1'
+    );
+    const cadenceDays: number[] = config.rows[0]?.cadence_days ?? [2, 5, 7];
+
+    // Query pending envelopes that are still 'sent' (stops automatically once completed)
+    const pendingEnvelopes = await pool.query(
+      `SELECT bs.id AS signature_id, bs.envelope_id, bs.created_at, bs.bond_record_id,
+              br.bond_id, i.user_id, u.email AS importer_email
+       FROM bond_signatures bs
+       JOIN bond_records br ON br.id = bs.bond_record_id
+       JOIN importers i ON i.id = br.importer_id
+       JOIN users u ON u.id = i.user_id
+       WHERE bs.status = 'sent' AND br.signature_status = 'sent'`
+    );
+
+    let processedCount = 0;
+    const now = Date.now();
+
+    for (const envRecord of pendingEnvelopes.rows) {
+      const daysElapsed = (now - new Date(envRecord.created_at).getTime()) / (1000 * 60 * 60 * 24);
+
+      // Check existing reminder history count for this envelope
+      const sentLogs = await pool.query(
+        'SELECT COUNT(*) FROM bond_signature_reminders_log WHERE envelope_id = $1',
+        [envRecord.envelope_id]
+      );
+      const remindersSentCount = Number(sentLogs.rows[0]?.count ?? 0);
+
+      if (remindersSentCount < cadenceDays.length) {
+        const targetThresholdDays = cadenceDays[remindersSentCount];
+        if (targetThresholdDays && daysElapsed >= targetThresholdDays) {
+          // Send notification via notifications delivery
+          const message = `Reminder (Day ${Math.floor(daysElapsed)}): Please complete your customs bond signature for Bond #${envRecord.bond_id}.`;
+          await pool.query(
+            `INSERT INTO notifications (user_id, kind, message, created_at)
+             VALUES ($1, 'bond_signature_reminder', $2, now())`,
+            [envRecord.user_id, message]
+          );
+
+          await pool.query(
+            `INSERT INTO bond_signature_reminders_log (bond_record_id, envelope_id, reminder_type, sent_at)
+             VALUES ($1, $2, $3, now())`,
+            [envRecord.bond_record_id, envRecord.envelope_id, `automated_day_${targetThresholdDays}`]
+          );
+
+          await pool.query(
+            'UPDATE bond_signatures SET last_reminder_sent_at = now() WHERE id = $1',
+            [envRecord.signature_id]
+          );
+
+          processedCount++;
+        }
+      }
+    }
+
+    res.json({ processed: processedCount, totalPending: pendingEnvelopes.rows.length });
   }
 );
 
