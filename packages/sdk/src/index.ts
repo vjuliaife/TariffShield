@@ -135,6 +135,38 @@ export class TariffShieldApiClient {
       method: 'POST',
     });
   }
+
+  async createWebhookSubscription(
+    importerId: string,
+    data: { targetUrl: string; eventTypes: ('deposit' | 'top_up' | 'clawback')[] }
+  ) {
+    return this.request(`/importers/${importerId}/webhook-subscriptions`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async listWebhookSubscriptions(importerId: string, eventType?: string) {
+    const query = eventType ? `?eventType=${encodeURIComponent(eventType)}` : '';
+    return this.request(`/importers/${importerId}/webhook-subscriptions${query}`);
+  }
+
+  async deleteWebhookSubscription(importerId: string, subId: string) {
+    return this.request(`/importers/${importerId}/webhook-subscriptions/${subId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async listWebhookDeliveries(
+    importerId: string,
+    opts?: { subscriptionId?: string; limit?: number }
+  ) {
+    const params = new URLSearchParams();
+    if (opts?.subscriptionId) params.set('subscriptionId', opts.subscriptionId);
+    if (opts?.limit) params.set('limit', String(opts.limit));
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return this.request(`/importers/${importerId}/webhook-deliveries${query}`);
+  }
 }
 
 export interface TariffShieldClientOptions {
@@ -536,6 +568,59 @@ export class TariffShieldClient {
 
 function addressToScVal(addr: string): xdr.ScVal {
   return new Address(addr).toScVal();
+}
+
+/**
+ * Verifies an incoming TariffShield webhook request signature.
+ *
+ * @param payload Raw HTTP request body string or Buffer
+ * @param signatureHeader X-TariffShield-Signature header value (e.g. t=1234567,v1=abcdef...)
+ * @param secret Webhook subscription secret key
+ * @param toleranceSeconds Max allowed age in seconds to prevent replay attacks (default 300s)
+ */
+export function verifyWebhookSignature(
+  payload: string | Buffer,
+  signatureHeader: string,
+  secret: string,
+  toleranceSeconds = 300
+): boolean {
+  if (!signatureHeader || !secret) return false;
+
+  const parts = signatureHeader.split(',');
+  let timestampStr: string | null = null;
+  let signature: string | null = null;
+
+  for (const part of parts) {
+    const [key, value] = part.split('=');
+    if (key === 't') timestampStr = value ?? null;
+    if (key === 'v1') signature = value ?? null;
+  }
+
+  if (!timestampStr || !signature) return false;
+
+  const timestamp = parseInt(timestampStr, 10);
+  if (isNaN(timestamp)) return false;
+
+  if (toleranceSeconds > 0) {
+    const now = Math.floor(Date.now() / 1000);
+    if (Math.abs(now - timestamp) > toleranceSeconds) {
+      return false;
+    }
+  }
+
+  const body = typeof payload === 'string' ? payload : payload.toString('utf8');
+  const signedPayload = `${timestampStr}.${body}`;
+
+  // NodeJS / ESM environment HMAC verification
+  if (typeof process !== 'undefined' && process.versions && process.versions.node) {
+    try {
+      const crypto = require('crypto');
+      const expected = crypto.createHmac('sha256', secret).update(signedPayload).digest('hex');
+      return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
+    } catch {}
+  }
+
+  return false;
 }
 
 export {
