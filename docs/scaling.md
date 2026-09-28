@@ -71,8 +71,10 @@ BullMQ does not require Redis Cluster for this workload.
 Returns `503` with `status: "degraded"` if any dependency check fails.
 
 - `GET /health/live` — liveness probe (process is up), no dependency checks.
-- `GET /health/ready` — readiness probe: `200` only if DB, Soroban RPC, and
-  Redis are all reachable. Use this for load balancer target health checks
+  Always returns `200` with `{ "status": "ok" }`.
+- `GET /health/ready` — readiness probe: `200` with `{ "status": "ok" }` only
+  if DB, Soroban RPC, and Redis are all reachable, otherwise `503` with
+  `{ "status": "degraded" }`. Use this for load balancer target health checks
   and Kubernetes `readinessProbe` (use `/health/live` for `livenessProbe`).
 
 ## Load balancer configuration

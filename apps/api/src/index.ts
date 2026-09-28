@@ -32,6 +32,9 @@ import { regulatoryRouter } from './routes/regulatory.js';
 import { healthRouter } from './routes/health.js';
 import { httpLogger, logger } from './lib/logger.js';
 import { notificationsRouter } from './routes/notifications.js';
+import { supportTicketsRouter, adminSupportTicketsRouter } from './routes/support-tickets.js';
+import { brokerRouter } from './routes/broker.js';
+import { htsLookupRouter } from './routes/hts-lookup.js';
 import { upgradeSubscriptionsRouter } from './routes/upgrade-subscriptions.js';
 import { bondAnnotationsRouter } from './routes/bond-annotations.js';
 import { slaRouter } from './routes/sla.js';
@@ -39,6 +42,7 @@ import { developerRouter } from './routes/developer.js';
 import { onboardingRouter } from './routes/onboarding.js';
 import { npsRouter } from './routes/nps.js';
 import { reportTemplatesRouter } from './routes/report-templates.js';
+import { brandingRouter, brandingPublicRouter } from './routes/branding.js';
 import { apiKeyUsageMeter } from './services/api-key-usage.js';
 import { startApiKeyUsagePruneScheduler } from './jobs/prune-api-key-usage.js';
 import { startOnboardingDripScheduler } from './services/onboarding-drip.js';
@@ -332,11 +336,17 @@ app.use('/auth/login', authLimiter);
 app.use('/auth', authRouter);
 app.use('/importers', importersRouter);
 app.use('/importers', kycRouter);
+app.use('/importers', supportTicketsRouter);
+app.use('/importers', brokerRouter);
+app.use('/importers', htsLookupRouter);
+app.use('/admin', adminSupportTicketsRouter);
 app.use('/compliance', complianceRouter);
 app.use('/compliance-report-links', complianceReportLinksRouter); // unauthenticated, token-gated
 app.use('/admin', adminRouter);
 app.use('/account', privacyRouter);
 app.use('/account', tosRouter);
+app.use('/account/api-keys', apiKeysRouter);
+app.use('/api/v1/account/api-keys', apiKeysRouter);
 app.use('/privacy', privacyRouter);
 app.use('/surety-license', suretyLicenseRouter);
 app.use('/notifications', notificationsRouter);
@@ -348,6 +358,8 @@ app.use('/onboarding', onboardingRouter);
 app.use('/importer-experience', importerExperienceRouter);
 app.use('/nps', npsRouter);
 app.use('/report-templates', reportTemplatesRouter);
+app.use('/branding/public', brandingPublicRouter); // unauthenticated, presentation-only
+app.use('/branding', brandingRouter);
 app.use('/api/v1/regulatory', regulatoryRouter);
 app.use('/bonds', bondWebhookRouter); // unauthenticated DocuSign webhook
 app.use('/api', bondSignaturesRouter); // authenticated bond signature routes
@@ -382,6 +394,8 @@ async function start() {
   startOnboardingDripScheduler();
   startComplianceEscalation();
   startScheduledComplianceReportDelivery();
+  startScheduledDepositsJob();
+  startScheduledWithdrawalsJob();
   app.listen(env.PORT, () => {
     logger.info(
       {

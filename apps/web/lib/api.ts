@@ -419,6 +419,22 @@ export const api = {
   saveReportTemplate: (b: Partial<ReportTemplate>) =>
     request<{ template: ReportTemplate }>('/report-templates', { method: 'PUT', body: b }),
 
+  // ── White-label Branding (#998) ───────────────────────────────────────────
+  getBranding: () => request<{ branding: Branding; isDefault: boolean }>('/branding'),
+  getPublicBranding: (slug: string) =>
+    request<{ branding: Branding; isDefault: boolean }>(
+      `/branding/public/${encodeURIComponent(slug)}`,
+      { auth: false }
+    ),
+  saveBranding: (b: {
+    slug: string;
+    brandName: string | null;
+    logoDataUrl: string | null;
+    primaryColor: string | null;
+  }) => request<{ branding: Branding }>('/branding', { method: 'PUT', body: b }),
+  resetBranding: () =>
+    request<{ branding: Branding; isDefault: boolean }>('/branding', { method: 'DELETE' }),
+
   getAuditLogCsvUrl: (query?: {
     actor_user_id?: string;
     action?: string;
@@ -565,6 +581,13 @@ export interface ReportTemplate {
   logoUrl: string | null;
   headerText: string | null;
   footerText: string | null;
+}
+
+export interface Branding {
+  slug: string | null;
+  brandName: string;
+  logoDataUrl: string | null;
+  primaryColor: string | null;
 }
 
 export interface AuditLogEntry {

@@ -1,0 +1,49 @@
+openapi: 3.0.3
+info:
+  title: TariffShield API
+  description: Public API for TariffShield integrations.
+  version: 1.0.0
+servers:
+  - url: https://api.tariffshield.com/v1
+    description: Production API
+  - url: https://api.staging.tariffshield.com/v1
+    description: Staging API
+paths:
+  /importers:
+    get:
+      summary: List importers
+      responses:
+        '200':
+          description: A list of importers
+  /auth/login:
+    post:
+      summary: Authenticate user
+      responses:
+        '200':
+          description: Successful authentication
+  /kyc/submit:
+    post:
+      summary: Submit KYC documents
+      responses:
+        '200':
+          description: KYC submitted
+  /notifications:
+    get:
+      summary: Get notifications
+      responses:
+        '200':
+          description: List of notifications
+  /bond-signatures:
+    post:
+      summary: Request bond signature
+      responses:
+        '201':
+          description: Bond signature created
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+security:
+  - bearerAuth: []

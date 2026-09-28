@@ -7,6 +7,12 @@ import {
   tosReacceptanceGate,
   type AuthedRequest,
 } from '../auth.js';
+import {
+  NOTIFICATION_EVENT_TYPES,
+  NOTIFICATION_CHANNELS,
+  getPreferenceGrid,
+  setPreference,
+} from '../services/notification-preferences.js';
 
 export const notificationsRouter = Router();
 notificationsRouter.use(authMiddleware);
@@ -17,8 +23,7 @@ notificationsRouter.use(tosReacceptanceGate);
 // GET /importers/:id/events (base64 "<created_at ISO>|<id>" keyset — see the
 // comment on that endpoint for the full rationale). Not shared as a common
 // utility with that endpoint: doing so would mean editing an unrelated,
-// already-working route in importers.ts, which is out of this issue's scope
-// (see implementation.md).
+// already-working route in importers.ts, which is out of this issue's scope.
 function decodeNotificationsCursor(raw: string): { createdAt: string; id: string } | null {
   try {
     const decoded = Buffer.from(raw, 'base64').toString('utf8');
@@ -148,3 +153,130 @@ notificationsRouter.patch('/:id/read', async (req: Request, res: Response) => {
     },
   });
 });
+
+// ── #990: GET/PUT /notifications/preferences — per-event, per-channel toggles ──
+
+// GET /notifications/preferences — full grid (eventType x channel), defaulted
+// to enabled, with `locked: true` on pairs that can't be disabled (critical
+// compliance categories on the in_app channel).
+notificationsRouter.get('/preferences', async (req: Request, res: Response) => {
+  const user = (req as AuthedRequest).user;
+  const grid = await getPreferenceGrid(user.id);
+  res.json({ preferences: grid });
+});
+
+const SetPreferenceSchema = z.object({
+  eventType: z.enum(NOTIFICATION_EVENT_TYPES),
+  channel: z.enum(NOTIFICATION_CHANNELS),
+  enabled: z.boolean(),
+});
+
+const PutPreferencesSchema = z.object({
+  preferences: z.array(SetPreferenceSchema).min(1).max(100),
+});
+
+// PUT /notifications/preferences — bulk-upsert one or more toggles.
+notificationsRouter.put('/preferences', async (req: Request, res: Response) => {
+  const user = (req as AuthedRequest).user;
+
+  const parse = PutPreferencesSchema.safeParse(req.body);
+  if (!parse.success) {
+    res.status(400).json({ error: 'invalid input', details: parse.error.issues });
+    return;
+  }
+
+  for (const { eventType, channel, enabled } of parse.data.preferences) {
+    try {
+      await setPreference(user.id, eventType, channel, enabled);
+    } catch (err) {
+      // setPreference throws only for "disable a locked critical pair".
+      res.status(400).json({
+        error: err instanceof Error ? err.message : 'invalid preference change',
+      });
+      return;
+    }
+  }
+
+  const grid = await getPreferenceGrid(user.id);
+  res.json({ preferences: grid });
+});
+
+// ── #1017: Configurable Health Score Alert Thresholds ────────────────────────
+
+const HealthThresholdsSchema = z
+  .object({
+    warningThreshold: z.number().int().min(1).max(100),
+    criticalThreshold: z.number().int().min(0).max(99),
+  })
+  .refine((data) => data.criticalThreshold < data.warningThreshold, {
+    message: 'criticalThreshold must be strictly less than warningThreshold',
+  });
+
+// GET /notifications/thresholds/:importerId — get importer health score thresholds
+notificationsRouter.get('/thresholds/:importerId', async (req: Request, res: Response) => {
+  const importerId = String(req.params.importerId ?? '');
+
+  const result = await pool.query(
+    'SELECT warning_threshold, critical_threshold, last_notified_state FROM importer_health_thresholds WHERE importer_id = $1',
+    [importerId]
+  );
+
+  if (result.rowCount === 0) {
+    res.json({
+      thresholds: {
+        warningThreshold: 60,
+        criticalThreshold: 40,
+        lastNotifiedState: 'NORMAL',
+      },
+    });
+    return;
+  }
+
+  const row = result.rows[0];
+  res.json({
+    thresholds: {
+      warningThreshold: row.warning_threshold,
+      criticalThreshold: row.critical_threshold,
+      lastNotifiedState: row.last_notified_state,
+    },
+  });
+});
+
+// PUT /notifications/thresholds/:importerId — configure importer health score thresholds
+notificationsRouter.put('/thresholds/:importerId', async (req: Request, res: Response) => {
+  const importerId = String(req.params.importerId ?? '');
+
+  const parse = HealthThresholdsSchema.safeParse(req.body);
+  if (!parse.success) {
+    res.status(400).json({ error: 'invalid threshold configuration', details: parse.error.issues });
+    return;
+  }
+
+  const { warningThreshold, criticalThreshold } = parse.data;
+
+  try {
+    const upserted = await pool.query(
+      `INSERT INTO importer_health_thresholds (importer_id, warning_threshold, critical_threshold, updated_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (importer_id) DO UPDATE
+         SET warning_threshold = EXCLUDED.warning_threshold,
+             critical_threshold = EXCLUDED.critical_threshold,
+             updated_at = NOW()
+       RETURNING warning_threshold, critical_threshold, last_notified_state`,
+      [importerId, warningThreshold, criticalThreshold]
+    );
+
+    const row = upserted.rows[0];
+    res.json({
+      thresholds: {
+        warningThreshold: row.warning_threshold,
+        criticalThreshold: row.critical_threshold,
+        lastNotifiedState: row.last_notified_state,
+      },
+    });
+  } catch (err: any) {
+    console.error('[notifications] failed to update health thresholds:', err);
+    res.status(500).json({ error: 'failed to update threshold settings' });
+  }
+});
+

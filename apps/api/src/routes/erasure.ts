@@ -22,7 +22,7 @@ erasureRouter.post('/account/erasure-request', async (req: Request, res: Respons
   const parse = ErasureRequestSchema.safeParse(req.body);
 
   if (!parse.success) {
-    res.status(400).json({ error: 'invalid input', details: parse.error.issues });
+    res.status(400).json({ error: 'invalid input', target: 'body', details: parse.error.issues });
     return;
   }
 
@@ -113,7 +113,7 @@ erasureRouter.post('/retention-policies', async (req: Request, res: Response) =>
   
   const parse = RetentionPolicySchema.safeParse(req.body);
   if (!parse.success) {
-    res.status(400).json({ error: 'invalid input', details: parse.error.issues });
+    res.status(400).json({ error: 'invalid input', target: 'body', details: parse.error.issues });
     return;
   }
 

@@ -3,6 +3,9 @@ import pinoHttp from 'pino-http';
 import { randomUUID } from 'crypto';
 import { env, isProduction } from '../config/env.js';
 
+// The API's single logger. Subsystems that need their own tagging or level
+// (e.g. Soroban RPC traces in ./soroban/logger.ts) derive a child of this
+// logger instead of standing up a separate logging stack (#972).
 export const logger = pino({
   level: env.LOG_LEVEL || 'info',
   transport: isProduction

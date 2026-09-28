@@ -28,6 +28,10 @@ The API exports three health check endpoints:
 - `/health/ready`: Readiness probe for deployment gates (Kubernetes/Render).
 - `/health/live`: Liveness probe (process heart-beat).
 
+All health endpoints return JSON with a `status` field (`"ok"` on 200,
+`"degraded"` on 503), so monitors can assert on either the status code or
+the body.
+
 ## Prometheus Alert Routing
 
 ### Alertmanager configuration

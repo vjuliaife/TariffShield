@@ -48,6 +48,11 @@ export const openApiSpec = {
         required: ['error'],
         properties: {
           error: { type: 'string', example: 'invalid input' },
+          target: {
+            type: 'string',
+            enum: ['body', 'query'],
+            description: 'On validation failures, which part of the request failed schema validation',
+          },
           details: { type: 'array', items: { type: 'object' } },
         },
       },
@@ -150,20 +155,22 @@ export const openApiSpec = {
       get: {
         tags: ['Health'],
         summary: 'Liveness probe',
-        description: 'Returns 200 OK as long as the Node.js process is running.',
+        description:
+          'Returns 200 with `{ "status": "ok" }` as long as the Node.js process is running.',
         security: [],
-        responses: { 200: { description: 'Process alive' } },
+        responses: { 200: { description: 'Process alive — `{ "status": "ok" }`' } },
       },
     },
     '/health/ready': {
       get: {
         tags: ['Health'],
         summary: 'Readiness probe',
-        description: 'Returns 200 only when Postgres and Soroban RPC are reachable.',
+        description:
+          'Returns 200 only when Postgres, Soroban RPC and Redis are reachable. The body is `{ "status": "ok" }` on success and `{ "status": "degraded" }` on 503.',
         security: [],
         responses: {
-          200: { description: 'Service ready to handle traffic' },
-          503: { description: 'Service not yet ready' },
+          200: { description: 'Service ready to handle traffic — `{ "status": "ok" }`' },
+          503: { description: 'Service not yet ready — `{ "status": "degraded" }`' },
         },
       },
     },

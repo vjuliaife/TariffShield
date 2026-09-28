@@ -40,7 +40,7 @@ Once assessed, remediate the dependency according to its ecosystem:
    cargo update -p <vulnerable-crate-name>
    ```
    This will update the lockfile to the latest compatible semver version.
-2. **Upgrade Direct Dependencies**: If the vulnerability is in a direct dependency and requires a major/minor version bump, edit the dependency version in [Cargo.toml](file:///Users/favoureze/TariffShield/Cargo.toml) or the contract's Cargo.toml and run:
+2. **Upgrade Direct Dependencies**: If the vulnerability is in a direct dependency and requires a major/minor version bump, edit the dependency version in [Cargo.toml](../Cargo.toml) or the contract's Cargo.toml and run:
    ```bash
    cargo build
    ```
@@ -52,7 +52,7 @@ Once assessed, remediate the dependency according to its ecosystem:
    ```bash
    npm install <package-name>@latest --workspace=<workspace-name>
    ```
-3. **Dependency Overrides**: If the vulnerability is in a deep transitive dependency and the parent package has not been updated, use the `overrides` field in the root [package.json](file:///Users/favoureze/TariffShield/package.json) to force a specific version:
+3. **Dependency Overrides**: If the vulnerability is in a deep transitive dependency and the parent package has not been updated, use the `overrides` field in the root [package.json](../package.json) to force a specific version:
    ```json
    "overrides": {
      "vulnerable-package": "^1.2.3"

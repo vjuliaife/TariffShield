@@ -819,3 +819,154 @@ complianceRouter.get('/escalation-history/:flagId', async (req: Request, res: Re
 
   res.json({ history: history.rows });
 });
+
+// ── Importer Risk Scoring Dashboard & Drill-Down Analytics (#1027) ─────────
+
+// GET /api/v1/compliance/risk-scores — Ranked Importers by Risk Score (descending)
+complianceRouter.get('/risk-scores', async (req: Request, res: Response) => {
+  try {
+    const result = await pool.query(
+      `SELECT rs.importer_id, i.legal_name, i.bond_id, rs.risk_score, rs.risk_level,
+              rs.contributing_factors, rs.calculated_at
+       FROM importer_risk_scores rs
+       JOIN importers i ON i.id = rs.importer_id
+       ORDER BY rs.risk_score DESC`
+    );
+    res.json({ importers: result.rows });
+  } catch (err: any) {
+    console.error('[compliance] failed to fetch risk scores:', err);
+    res.status(500).json({ error: 'failed to fetch risk scores' });
+  }
+});
+
+// GET /api/v1/compliance/risk-scores/:importerId/drill-down — Detailed Factors & Historical Trend
+complianceRouter.get('/risk-scores/:importerId/drill-down', async (req: Request, res: Response) => {
+  const { importerId } = req.params;
+
+  try {
+    const [scoreRes, trendRes] = await Promise.all([
+      pool.query(
+        `SELECT rs.*, i.legal_name
+         FROM importer_risk_scores rs
+         JOIN importers i ON i.id = rs.importer_id
+         WHERE rs.importer_id = $1`,
+        [importerId]
+      ),
+      pool.query(
+        `SELECT risk_score, calculated_at
+         FROM importer_risk_trends
+         WHERE importer_id = $1
+         ORDER BY calculated_at ASC
+         LIMIT 90`,
+        [importerId]
+      ),
+    ]);
+
+    if (!scoreRes.rowCount) {
+      res.status(404).json({ error: 'risk score profile not found' });
+      return;
+    }
+
+    res.json({
+      importerId,
+      legalName: scoreRes.rows[0].legal_name,
+      riskScore: scoreRes.rows[0].risk_score,
+      riskLevel: scoreRes.rows[0].risk_level,
+      factors: scoreRes.rows[0].contributing_factors,
+      lastCalculatedAt: scoreRes.rows[0].calculated_at,
+      trend: trendRes.rows,
+    });
+  } catch (err: any) {
+    console.error('[compliance] failed to query risk score drill-down:', err);
+    res.status(500).json({ error: 'failed to query risk score details' });
+  }
+});
+
+/**
+ * Scheduled background task to recalculate risk scores across importers
+ */
+export async function recalculateImporterRiskScores() {
+  try {
+    const importers = await pool.query(`SELECT id FROM importers WHERE deleted_at IS NULL`);
+
+    for (const row of importers.rows) {
+      const importerId = row.id;
+
+      // 1. Fetch active compliance flags
+      const flagsRes = await pool.query(
+        `SELECT severity, COUNT(*) as cnt
+         FROM compliance_flags
+         WHERE importer_id = $1 AND resolution_status = 'open'
+         GROUP BY severity`,
+        [importerId]
+      );
+
+      let flagPoints = 0;
+      const flagCounts: Record<string, number> = { critical: 0, high: 0, medium: 0, low: 0 };
+      for (const f of flagsRes.rows) {
+        const cnt = parseInt(f.cnt, 10);
+        flagCounts[f.severity] = cnt;
+        if (f.severity === 'critical') flagPoints += cnt * 35;
+        if (f.severity === 'high') flagPoints += cnt * 20;
+        if (f.severity === 'medium') flagPoints += cnt * 10;
+        if (f.severity === 'low') flagPoints += cnt * 5;
+      }
+      const flagScore = Math.min(100, flagPoints);
+
+      // 2. Fetch collateral health ratio
+      const bondRes = await pool.query(
+        `SELECT bond_amount, cbp_minimum_required FROM bond_records WHERE importer_id = $1 ORDER BY created_at DESC LIMIT 1`,
+        [importerId]
+      );
+      let healthScore = 100;
+      if (bondRes.rowCount) {
+        const bAmount = BigInt(bondRes.rows[0].bond_amount || '1');
+        const reqAmount = BigInt(bondRes.rows[0].cbp_minimum_required || '1');
+        const ratio = Number((bAmount * 100n) / (reqAmount === 0n ? 1n : reqAmount));
+        healthScore = Math.min(100, ratio);
+      }
+      const unhealthScore = Math.max(0, 100 - healthScore);
+
+      // 3. Fetch dispute count
+      const disputeRes = await pool.query(
+        `SELECT COUNT(*) as cnt FROM compliance_flags WHERE importer_id = $1 AND flag_type = 'dispute'`,
+        [importerId]
+      );
+      const disputeCount = parseInt(disputeRes.rows[0]?.cnt || '0', 10);
+      const disputeScore = Math.min(100, disputeCount * 20);
+
+      // 4. Compute composite risk score (0-100)
+      const compositeScore = Math.min(100, Math.round(flagScore * 0.4 + unhealthScore * 0.4 + disputeScore * 0.2));
+      const riskLevel = compositeScore >= 75 ? 'critical' : compositeScore >= 50 ? 'high' : compositeScore >= 25 ? 'medium' : 'low';
+
+      const contributingFactors = {
+        flagCounts,
+        flagScoreContribution: Math.round(flagScore * 0.4),
+        healthScore,
+        unhealthScoreContribution: Math.round(unhealthScore * 0.4),
+        disputeCount,
+        disputeScoreContribution: Math.round(disputeScore * 0.2),
+      };
+
+      await pool.query(
+        `INSERT INTO importer_risk_scores (importer_id, risk_score, risk_level, contributing_factors, calculated_at)
+         VALUES ($1, $2, $3, $4::jsonb, NOW())
+         ON CONFLICT (importer_id) DO UPDATE SET
+           risk_score = EXCLUDED.risk_score,
+           risk_level = EXCLUDED.risk_level,
+           contributing_factors = EXCLUDED.contributing_factors,
+           calculated_at = NOW()`,
+        [importerId, compositeScore, riskLevel, JSON.stringify(contributingFactors)]
+      );
+
+      await pool.query(
+        `INSERT INTO importer_risk_trends (importer_id, risk_score, calculated_at)
+         VALUES ($1, $2, NOW())`,
+        [importerId, compositeScore]
+      );
+    }
+  } catch (err: any) {
+    console.error('[compliance] error calculating importer risk scores:', err);
+  }
+}
+

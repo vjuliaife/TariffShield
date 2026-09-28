@@ -230,16 +230,22 @@ Running into a setup or runtime error? Check **[docs/FAQ.md](./docs/FAQ.md)** fo
 
 ## API Documentation
 
-The REST API ships with an OpenAPI 3.1 specification and an interactive Swagger UI:
+The REST API provides a machine-readable OpenAPI specification for SDK consumers and third-party integrators:
 
+- [docs/api/openapi.yml](./docs/api/openapi.yml) — The source of truth OpenAPI 3.x specification.
+
+To view the interactive Swagger UI and explore the API locally:
+
+1. Start the API server: `npm run dev:api`
+2. Open [http://localhost:3002/docs](http://localhost:3002/docs) in your browser.
+
+The API also serves the spec at runtime:
 | Endpoint | Description |
 |---|---|
 | `GET /docs` | Swagger UI (rendered in browser) |
-| `GET /docs/openapi.json` | Raw OpenAPI 3.1 spec (JSON) |
+| `GET /docs/openapi.json` | Raw OpenAPI spec (JSON) |
 
-Start the API (`npm run dev:api`) then open [http://localhost:3002/docs](http://localhost:3002/docs).
-
-The spec covers all 30+ routes across Auth, Importers, KYC, Compliance, Surety License, and Health, with request/response schemas and JWT security requirements on each protected route.
+The spec covers all 30+ routes across Auth, Importers, KYC, Compliance, Surety License, and Health, with request/response schemas and JWT security requirements on each protected route. To regenerate or update the spec, simply edit the `docs/api/openapi.yml` file.
 
 ## Code Style
 

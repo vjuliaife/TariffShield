@@ -5,6 +5,7 @@ import { pool } from './db.js';
 import { contractClient, platformKeypair, suretyKeypair } from './stellar.js';
 import { Keypair } from '@stellar/stellar-sdk';
 import { invalidateOnChainAccount } from './cache.js';
+import { dispatchWebhookEvent } from './services/webhooks.js';
 
 export interface TxSubmitJobData {
   method:
@@ -180,6 +181,25 @@ export function createTxSubmitWorker() {
       // pre-write state cached for the rest of the 30s TTL.
       if (method === 'deposit' || method === 'withdraw' || method === 'clawback') {
         await invalidateOnChainAccount(importerId);
+      }
+
+      // #1023: Dispatch outbound webhooks for subscribed events
+      if (method === 'deposit') {
+        dispatchWebhookEvent(importerId, 'deposit', {
+          amount: eventAmount,
+          txHash: onChain.txHash,
+          bucket: args.bucket || 'collateral',
+        }).catch(() => {});
+      } else if (method === 'auto_top_up') {
+        dispatchWebhookEvent(importerId, 'top_up', {
+          amount: eventAmount,
+          txHash: onChain.txHash,
+        }).catch(() => {});
+      } else if (method === 'clawback') {
+        dispatchWebhookEvent(importerId, 'clawback', {
+          amount: eventAmount,
+          txHash: onChain.txHash,
+        }).catch(() => {});
       }
 
       return {

@@ -123,13 +123,17 @@ regulatoryRouter.get('/state-report/:state_code', async (req: Request, res: Resp
   }
 
   // 4. Data aggregation queries covering the reporting period:
+  // #1024: Exclude sandbox/trial importer accounts & bonds from regulatory report queries
   // a) Total bonds written and aggregate face value in target state
   const bondsQuery = await pool.query<{ total_bonds: string; aggregate_face_value: string }>(
     `SELECT COUNT(*)::text as total_bonds, COALESCE(SUM(bond_amount), 0)::text as aggregate_face_value
-     FROM bond_records
-     WHERE state_code = $1
-       AND effective_date >= $2
-       AND effective_date <= $3`,
+     FROM bond_records br
+     JOIN importers i ON br.importer_id = i.id
+     WHERE br.state_code = $1
+       AND br.effective_date >= $2
+       AND br.effective_date <= $3
+       AND COALESCE(i.is_sandbox, false) = false
+       AND COALESCE(br.is_sandbox, false) = false`,
     [stateCode, startDate, endDate]
   );
 
@@ -145,7 +149,9 @@ regulatoryRouter.get('/state-report/:state_code', async (req: Request, res: Resp
      WHERE ce.kind = 'clawback'
        AND br.state_code = $1
        AND ce.created_at >= $2
-       AND ce.created_at <= $3`,
+       AND ce.created_at <= $3
+       AND COALESCE(i.is_sandbox, false) = false
+       AND COALESCE(br.is_sandbox, false) = false`,
     [stateCode, startDate, endDate]
   );
   const claimsFiled = parseInt(claimsQuery.rows[0]?.claims_count ?? '0', 10);
@@ -157,7 +163,9 @@ regulatoryRouter.get('/state-report/:state_code', async (req: Request, res: Resp
      JOIN bond_records br ON br.importer_id = i.id
      WHERE br.state_code = $1
        AND br.effective_date >= $2
-       AND br.effective_date <= $3`,
+       AND br.effective_date <= $3
+       AND COALESCE(i.is_sandbox, false) = false
+       AND COALESCE(br.is_sandbox, false) = false`,
     [stateCode, startDate, endDate]
   );
   const collateralHeld = collateralQuery.rows[0]?.collateral_held ?? '0';
@@ -170,6 +178,8 @@ regulatoryRouter.get('/state-report/:state_code', async (req: Request, res: Resp
      WHERE br.state_code = $1
        AND br.effective_date >= $2
        AND br.effective_date <= $3
+       AND COALESCE(i.is_sandbox, false) = false
+       AND COALESCE(br.is_sandbox, false) = false
      GROUP BY COALESCE(i.business_state, 'UNKNOWN')`,
     [stateCode, startDate, endDate]
   );

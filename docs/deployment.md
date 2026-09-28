@@ -26,7 +26,7 @@ Ensure you have the following tools installed with at least the specified minimu
 
 ### API Service — `apps/api/.env`
 
-These environment variables are validated at startup via Zod in [env.ts](file:///c:/Users/PAB-NETWORK/Downloads/TariffShield/apps/api/src/config/env.ts).
+These environment variables are validated at startup via Zod in [env.ts](../apps/api/src/config/env.ts).
 
 | Variable | Required | Description | Example Value |
 |----------|----------|-------------|---------------|
@@ -222,7 +222,7 @@ To revert to a prior web release, go to the **Deployments** tab on the Vercel da
 To rollback the API, navigate to the Render service dashboard, click **Rollback** under the deployment logs page, and select the target stable commit.
 
 ### Soroban Smart Contract Upgrades
-If a faulty WASM is deployed, do not attempt to delete the contract. Instead, invoke the multi-sig upgrade pattern defined in [lib.rs](file:///c:/Users/PAB-NETWORK/Downloads/TariffShield/contracts/tariff-shield/src/lib.rs):
+If a faulty WASM is deployed, do not attempt to delete the contract. Instead, invoke the multi-sig upgrade pattern defined in [lib.rs](../contracts/tariff-shield/src/lib.rs):
 1. Propose the new WASM hash:
    ```bash
    stellar contract invoke --id <contract-id> --network testnet --source-account <admin-secret-or-alias> -- propose_upgrade --caller "<admin-address>" --new_wasm_hash "<new-wasm-hash>"

@@ -299,7 +299,7 @@ NEXT_PUBLIC_CONTRACT_ID=...
 **Q:** API calls return 401 after working fine earlier in the day.
 
 ```json
-{"error": "Unauthorized", "detail": "jwt expired"}
+{"error": "invalid token"}
 ```
 
 ```

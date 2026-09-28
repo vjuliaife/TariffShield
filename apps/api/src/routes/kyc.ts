@@ -21,11 +21,11 @@ kycRouter.use(tosReacceptanceGate);
 
 const BSA_RETENTION_DAYS = 5 * 365;
 
-function s3KeyEncrypt(key: string): string {
+export function s3KeyEncrypt(key: string): string {
   return encryptFieldToJson(key) ?? key;
 }
 
-function s3KeyDecrypt(encrypted: string): string {
+export function s3KeyDecrypt(encrypted: string): string {
   try {
     return decryptFieldFromJson(encrypted) ?? encrypted;
   } catch {
@@ -35,7 +35,7 @@ function s3KeyDecrypt(encrypted: string): string {
 
 // Stub: in production, use AWS SDK PutObjectCommand to S3_KYC_BUCKET with SSE-KMS.
 // Returns the S3 object key for the uploaded document.
-async function uploadDocumentToS3(
+export async function uploadDocumentToS3(
   importerId: string,
   documentType: string,
   _fileBuffer: Buffer,
@@ -52,7 +52,7 @@ async function uploadDocumentToS3(
 }
 
 // Stub: in production, generate a pre-signed GetObjectCommand URL with 15-min TTL.
-function generatePresignedUrl(s3Key: string): string {
+export function generatePresignedUrl(s3Key: string): string {
   if (env.S3_KYC_BUCKET) {
     return `https://${env.S3_KYC_BUCKET}.s3.${env.AWS_REGION}.amazonaws.com/${s3Key}?presigned=stub`;
   }
@@ -69,7 +69,7 @@ const KycDocumentTypeSchema = z.enum([
 // For now, accept a base64-encoded payload for API simplicity. The 500 KB
 // per-file cap keeps a full batch comfortably inside the global 1 MB
 // express.json body limit (index.ts).
-const KYC_MAX_FILE_BYTES = 500 * 1024;
+export const KYC_MAX_FILE_BYTES = 500 * 1024;
 const KYC_BATCH_MAX_FILES = 10;
 
 const UploadKycFileSchema = z.object({
@@ -85,14 +85,14 @@ const UploadKycBatchSchema = z.object({
   documents: z.array(UploadKycFileSchema).min(1).max(KYC_BATCH_MAX_FILES),
 });
 
-type VirusScanStatus = 'pending' | 'clean' | 'infected';
+export type VirusScanStatus = 'pending' | 'clean' | 'infected';
 
 // Lightweight inline virus/content scan (#1006). Detects the EICAR
 // anti-malware test string and validates the file's magic bytes against the
 // declared MIME type. A buffer that neither trips a signature nor matches a
 // known header is left 'pending' for an external scanner rather than being
 // cleared — surfacing as `virus-scan-pending` in the batch response.
-function scanDocumentBuffer(buffer: Buffer, mimeType: string): VirusScanStatus {
+export function scanDocumentBuffer(buffer: Buffer, mimeType: string): VirusScanStatus {
   const eicar = Buffer.from(
     'X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*',
     'latin1'
@@ -192,7 +192,7 @@ kycRouter.post('/:id/kyc', async (req: Request, res: Response) => {
 
   const parse = UploadKycSchema.safeParse(req.body);
   if (!parse.success) {
-    res.status(400).json({ error: 'invalid input', details: parse.error.issues });
+    res.status(400).json({ error: 'invalid input', target: 'body', details: parse.error.issues });
     return;
   }
 
@@ -236,7 +236,7 @@ kycRouter.post('/:id/kyc/batch', async (req: Request, res: Response) => {
 
   const parse = UploadKycBatchSchema.safeParse(req.body);
   if (!parse.success) {
-    res.status(400).json({ error: 'invalid input', details: parse.error.issues });
+    res.status(400).json({ error: 'invalid input', target: 'body', details: parse.error.issues });
     return;
   }
 
@@ -337,7 +337,7 @@ kycRouter.patch('/:id/kyc', requireRole('surety_admin'), async (req: Request, re
 
   const parse = UpdateKycStatusSchema.safeParse(req.body);
   if (!parse.success) {
-    res.status(400).json({ error: 'invalid input', details: parse.error.issues });
+    res.status(400).json({ error: 'invalid input', target: 'body', details: parse.error.issues });
     return;
   }
 

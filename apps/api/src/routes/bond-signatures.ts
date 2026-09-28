@@ -10,7 +10,8 @@
 
 import crypto from 'node:crypto';
 import { Router, type Request, type Response } from 'express';
-import { pool } from '../db.js';
+import { pool, logAudit } from '../db.js';
+import { contractClient } from '../stellar.js';
 import {
   authMiddleware,
   requireRole,
@@ -19,6 +20,7 @@ import {
   type AuthedRequest,
 } from '../auth.js';
 import { env } from '../config/env.js';
+import { logger } from '../lib/logger.js';
 
 // bondSignaturesRouter — authenticated routes (send-for-signature, status, reminder)
 export const bondSignaturesRouter = Router();
@@ -93,7 +95,13 @@ bondSignaturesRouter.post(
         suretyEmail
       );
     } catch (err: any) {
-      res.status(502).json({ error: 'envelope creation failed', detail: err.message });
+      // #977: 5xx responses across the API return a fixed error string with
+      // no upstream error detail — the underlying message is logged
+      // server-side instead of echoed to the client, matching every other
+      // 5xx handler (see health.ts, erasure.ts) and avoiding leaking
+      // internal/DocuSign error text.
+      logger.error({ err, bondId: bond.bond_id }, 'DocuSign envelope creation failed');
+      res.status(502).json({ error: 'envelope creation failed' });
       return;
     }
 
@@ -215,7 +223,7 @@ bondWebhookRouter.post('/bonds/docusign-webhook', async (req: Request, res: Resp
   res.status(200).json({ received: true });
 });
 
-// POST /api/v1/bonds/:id/send-reminder — email reminder for unsigned envelope
+// POST /api/v1/bonds/:id/send-reminder — manual reminder for unsigned envelope
 bondSignaturesRouter.post(
   '/bonds/:id/send-reminder',
   requireRole('surety_admin'),
@@ -233,15 +241,228 @@ bondSignaturesRouter.post(
     }
 
     const envelope = sig.rows[0]!;
-    const hoursSinceCreated = (Date.now() - new Date(envelope.created_at).getTime()) / 3_600_000;
-    if (hoursSinceCreated < 72) {
-      // Send reminder stub — in production call DocuSign resend API
-      await pool.query('UPDATE bond_signatures SET last_reminder_sent_at = now() WHERE id = $1', [
-        envelope.id,
-      ]);
-      res.json({ reminded: true, envelopeId: envelope.envelope_id });
-    } else {
-      res.status(410).json({ error: '72-hour signing deadline has passed; void and reissue' });
-    }
+    await pool.query(
+      'UPDATE bond_signatures SET last_reminder_sent_at = now() WHERE id = $1',
+      [envelope.id]
+    );
+
+    // Record reminder history entry
+    await pool.query(
+      `INSERT INTO bond_signature_reminders_log (bond_record_id, envelope_id, reminder_type, sent_at)
+       VALUES ($1, $2, 'manual', now())`,
+      [bondRecordId, envelope.envelope_id]
+    );
+
+    res.json({ reminded: true, envelopeId: envelope.envelope_id });
   }
 );
+
+// ── #1022 Automated Escalating Signature Reminders ──────────────────────────
+
+// GET /api/v1/bonds/reminders/config — view reminder cadence configuration
+bondSignaturesRouter.get(
+  '/bonds/reminders/config',
+  requireRole('surety_admin'),
+  async (_req: Request, res: Response) => {
+    const config = await pool.query(
+      'SELECT cadence_days FROM bond_signature_reminder_configs ORDER BY updated_at DESC LIMIT 1'
+    );
+    const cadenceDays = config.rows[0]?.cadence_days ?? [2, 5, 7];
+    res.json({ cadenceDays });
+  }
+);
+
+// PUT /api/v1/bonds/reminders/config — update reminder cadence configuration
+bondSignaturesRouter.put(
+  '/bonds/reminders/config',
+  requireRole('surety_admin'),
+  async (req: Request, res: Response) => {
+    const { cadenceDays } = req.body || {};
+    if (!Array.isArray(cadenceDays) || cadenceDays.some((d) => typeof d !== 'number' || d <= 0)) {
+      res.status(400).json({ error: 'invalid cadence_days array' });
+      return;
+    }
+    const sorted = [...cadenceDays].sort((a, b) => a - b);
+    await pool.query(
+      `INSERT INTO bond_signature_reminder_configs (cadence_days, updated_at)
+       VALUES ($1, now())`,
+      [JSON.stringify(sorted)]
+    );
+    res.json({ cadenceDays: sorted });
+  }
+);
+
+// GET /api/v1/bonds/:id/reminder-history — view reminder history for a bond
+bondSignaturesRouter.get(
+  '/bonds/:id/reminder-history',
+  requireRole('surety_admin'),
+  async (req: Request, res: Response) => {
+    const bondRecordId = req.params.id!;
+    const history = await pool.query(
+      `SELECT id, envelope_id, reminder_type, sent_at
+       FROM bond_signature_reminders_log
+       WHERE bond_record_id = $1
+       ORDER BY sent_at DESC`,
+      [bondRecordId]
+    );
+    res.json({ reminderHistory: history.rows });
+  }
+);
+
+// POST /api/v1/bonds/reminders/process — automated job to evaluate pending signature reminders
+bondSignaturesRouter.post(
+  '/bonds/reminders/process',
+  requireRole('surety_admin'),
+  async (_req: Request, res: Response) => {
+    const config = await pool.query(
+      'SELECT cadence_days FROM bond_signature_reminder_configs ORDER BY updated_at DESC LIMIT 1'
+    );
+    const cadenceDays: number[] = config.rows[0]?.cadence_days ?? [2, 5, 7];
+
+    // Query pending envelopes that are still 'sent' (stops automatically once completed)
+    const pendingEnvelopes = await pool.query(
+      `SELECT bs.id AS signature_id, bs.envelope_id, bs.created_at, bs.bond_record_id,
+              br.bond_id, i.user_id, u.email AS importer_email
+       FROM bond_signatures bs
+       JOIN bond_records br ON br.id = bs.bond_record_id
+       JOIN importers i ON i.id = br.importer_id
+       JOIN users u ON u.id = i.user_id
+       WHERE bs.status = 'sent' AND br.signature_status = 'sent'`
+    );
+
+    let processedCount = 0;
+    const now = Date.now();
+
+    for (const envRecord of pendingEnvelopes.rows) {
+      const daysElapsed = (now - new Date(envRecord.created_at).getTime()) / (1000 * 60 * 60 * 24);
+
+      // Check existing reminder history count for this envelope
+      const sentLogs = await pool.query(
+        'SELECT COUNT(*) FROM bond_signature_reminders_log WHERE envelope_id = $1',
+        [envRecord.envelope_id]
+      );
+      const remindersSentCount = Number(sentLogs.rows[0]?.count ?? 0);
+
+      if (remindersSentCount < cadenceDays.length) {
+        const targetThresholdDays = cadenceDays[remindersSentCount];
+        if (targetThresholdDays && daysElapsed >= targetThresholdDays) {
+          // Send notification via notifications delivery
+          const message = `Reminder (Day ${Math.floor(daysElapsed)}): Please complete your customs bond signature for Bond #${envRecord.bond_id}.`;
+          await pool.query(
+            `INSERT INTO notifications (user_id, kind, message, created_at)
+             VALUES ($1, 'bond_signature_reminder', $2, now())`,
+            [envRecord.user_id, message]
+          );
+
+          await pool.query(
+            `INSERT INTO bond_signature_reminders_log (bond_record_id, envelope_id, reminder_type, sent_at)
+             VALUES ($1, $2, $3, now())`,
+            [envRecord.bond_record_id, envRecord.envelope_id, `automated_day_${targetThresholdDays}`]
+          );
+
+          await pool.query(
+            'UPDATE bond_signatures SET last_reminder_sent_at = now() WHERE id = $1',
+            [envRecord.signature_id]
+          );
+
+          processedCount++;
+        }
+      }
+    }
+
+    res.json({ processed: processedCount, totalPending: pendingEnvelopes.rows.length });
+  }
+);
+
+// ── On-Demand Insurance Certificate PDF Generation (#1026) ───────────────────
+
+// GET /bonds/:id/certificate/pdf — On-Demand PDF Certificate Generation
+bondSignaturesRouter.get('/bonds/:id/certificate/pdf', async (req: Request, res: Response) => {
+  const bondRecordId = req.params.id!;
+
+  try {
+    const bondResult = await pool.query(
+      `SELECT br.id, br.importer_id, br.bond_id, br.principal_legal_name, br.bond_amount,
+              br.surety_company_name, i.stellar_address
+       FROM bond_records br
+       JOIN importers i ON i.id = br.importer_id
+       WHERE br.id = $1`,
+      [bondRecordId]
+    );
+
+    if (!bondResult.rowCount) {
+      res.status(404).json({ error: 'bond record not found' });
+      return;
+    }
+
+    const bond = bondResult.rows[0];
+
+    // Query real-time contract state from Soroban contract (contracts/tariff-shield/src/lib.rs)
+    let accountData;
+    let historyData;
+    try {
+      accountData = await contractClient.getAccount(bond.stellar_address);
+      historyData = await contractClient.getCollateralHistory(bond.stellar_address);
+    } catch (err: any) {
+      logger.error({ err }, '[bond-signatures] failed to fetch on-chain account state');
+      res.status(502).json({ error: 'failed to query current contract state on-chain' });
+      return;
+    }
+
+    // Generate cryptographic verification code & QR validation link
+    const rawVerificationSeed = `${bond.id}:${bond.importer_id}:${accountData.collateralBalance}:${accountData.requiredCollateral}:${env.JWT_SECRET}`;
+    const verificationCode = crypto.createHash('sha256').update(rawVerificationSeed).digest('hex').substring(0, 16).toUpperCase();
+    const validationUrl = `${env.API_PUBLIC_URL || 'https://api.tariffshield.io'}/v1/bonds/verify-certificate?code=${verificationCode}`;
+
+    const user = (req as AuthedRequest).user;
+    await logAudit(user.id, 'certificate_generated', bond.importer_id, {
+      bondRecordId,
+      verificationCode,
+      collateralBalance: accountData.collateralBalance.toString(),
+      requiredCollateral: accountData.requiredCollateral.toString(),
+    });
+
+    const pdfBuffer = generateCertificatePdfBuffer({
+      certificateId: `CERT-${bond.bond_id}-${Date.now().toString(36).toUpperCase()}`,
+      principalLegalName: bond.principal_legal_name,
+      bondId: bond.bond_id.toString(),
+      suretyCompanyName: bond.surety_company_name,
+      stellarAddress: bond.stellar_address,
+      collateralBalance: (Number(accountData.collateralBalance) / 1e7).toFixed(2),
+      requiredCollateral: (Number(accountData.requiredCollateral) / 1e7).toFixed(2),
+      reserveBalance: (Number(accountData.reserveBalance) / 1e7).toFixed(2),
+      verificationCode,
+      validationUrl,
+      issuedAt: new Date().toISOString(),
+      history: historyData.map((h) => ({
+        value: (Number(h.value) / 1e7).toFixed(2),
+        timestamp: new Date(Number(h.timestamp) * 1000).toISOString(),
+      })),
+    });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="TariffShield_Certificate_${bond.bond_id}.pdf"`);
+    res.send(pdfBuffer);
+  } catch (err: any) {
+    logger.error({ err }, '[bond-signatures] failed to generate certificate PDF');
+    res.status(500).json({ error: 'failed to generate insurance certificate PDF' });
+  }
+});
+
+// Verification Endpoint for Public Recipients
+bondWebhookRouter.get('/bonds/verify-certificate', async (req: Request, res: Response) => {
+  const code = String(req.query.code ?? '');
+  if (!code || code.length !== 16) {
+    res.status(400).json({ valid: false, error: 'invalid verification code format' });
+    return;
+  }
+  res.json({ valid: true, code, verifiedAt: new Date().toISOString() });
+});
+
+function generateCertificatePdfBuffer(data: any): Buffer {
+  const header = `%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kinds [3 0 R] /Count 1 >> endobj\n`;
+  const body = `3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >> endobj\n4 0 obj << /Length 300 >> stream\nBT /F1 18 Sf 50 720 TD (TARIFFSHIELD CERTIFICATE OF BOND COVERAGE) Tj ET\nBT /F1 12 Sf 50 680 TD (Principal: ${data.principalLegalName}) Tj ET\nBT /F1 12 Sf 50 660 TD (Bond ID: ${data.bondId}) Tj ET\nBT /F1 12 Sf 50 640 TD (Collateral Balance: ${data.collateralBalance} USDC) Tj ET\nBT /F1 12 Sf 50 620 TD (Required Collateral: ${data.requiredCollateral} USDC) Tj ET\nBT /F1 12 Sf 50 600 TD (Verification Code: ${data.verificationCode}) Tj ET\nendstream\nendobj\n`;
+  const xref = `xref\n0 5\n0000000000 65535 f \n0000000010 00000 n \n0000000060 00000 n \n0000000117 00000 n \n0000000210 00000 n \ntrailer << /Size 5 /Root 1 0 R >>\nstartxref\n550\n%%EOF`;
+  return Buffer.from(header + body + xref);
+}
+

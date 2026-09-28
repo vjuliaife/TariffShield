@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import type { PoolClient } from 'pg';
 import { pool } from '../db.js';
+import { logger } from '../lib/logger.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -67,11 +68,11 @@ export async function runMigrations(action: 'up' | 'rollback' = 'up'): Promise<v
 
       const pending = migrationFiles.filter((m) => m.version > highestApplied);
       if (pending.length === 0) {
-        console.log('No pending migrations to run.');
+        logger.info('No pending migrations to run.');
         return;
       }
 
-      console.log(`Running ${pending.length} pending migrations...`);
+      logger.info(`Running ${pending.length} pending migrations...`);
       for (const m of pending) {
         const filePath = path.join(__dirname, m.filename);
         const fileUrl = pathToFileURL(filePath).href;
@@ -96,7 +97,7 @@ export async function runMigrations(action: 'up' | 'rollback' = 'up'): Promise<v
           } finally {
             soloClient.release();
           }
-          console.log(`Successfully applied migration (non-transactional): ${m.name}`);
+          logger.info(`Successfully applied migration (non-transactional): ${m.name}`);
           continue;
         }
 
@@ -110,10 +111,10 @@ export async function runMigrations(action: 'up' | 'rollback' = 'up'): Promise<v
           await client.query('COMMIT');
         } catch (err) {
           await client.query('ROLLBACK');
-          console.error(`Migration ${m.name} failed, rolled back.`);
+          logger.error(`Migration ${m.name} failed, rolled back.`);
           throw err;
         }
-        console.log(`Successfully applied migration: ${m.name}`);
+        logger.info(`Successfully applied migration: ${m.name}`);
       }
     } else if (action === 'rollback') {
       // Find the highest applied migration
@@ -121,7 +122,7 @@ export async function runMigrations(action: 'up' | 'rollback' = 'up'): Promise<v
         'SELECT version, name FROM schema_migrations ORDER BY version DESC LIMIT 1'
       );
       if (res.rows.length === 0) {
-        console.log('No migrations to rollback.');
+        logger.info('No migrations to rollback.');
         return;
       }
 
@@ -133,7 +134,7 @@ export async function runMigrations(action: 'up' | 'rollback' = 'up'): Promise<v
         );
       }
 
-      console.log(`Rolling back migration: ${m.name}...`);
+      logger.info(`Rolling back migration: ${m.name}...`);
       const filePath = path.join(__dirname, m.filename);
       const fileUrl = pathToFileURL(filePath).href;
       const mod = (await import(fileUrl)) as MigrationModule;
@@ -149,17 +150,17 @@ export async function runMigrations(action: 'up' | 'rollback' = 'up'): Promise<v
         } finally {
           soloClient.release();
         }
-        console.log(`Successfully rolled back migration (non-transactional): ${m.name}`);
+        logger.info(`Successfully rolled back migration (non-transactional): ${m.name}`);
       } else {
         await client.query('BEGIN');
         try {
           await mod.down(client);
           await client.query('DELETE FROM schema_migrations WHERE version = $1', [version]);
           await client.query('COMMIT');
-          console.log(`Successfully rolled back migration: ${m.name}`);
+          logger.info(`Successfully rolled back migration: ${m.name}`);
         } catch (err) {
           await client.query('ROLLBACK');
-          console.error('Rollback transaction failed, rolled back changes.');
+          logger.error('Rollback transaction failed, rolled back changes.');
           throw err;
         }
       }

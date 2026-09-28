@@ -47,10 +47,138 @@ export interface InvokeResult<T> {
   applicationOrder: number;
 }
 
+export interface TariffShieldApiOptions {
+  baseUrl: string;
+  apiKey?: string;
+  sessionToken?: string;
+}
+
+export class TariffShieldApiClient {
+  private readonly baseUrl: string;
+  public readonly apiKey?: string;
+  public readonly sessionToken?: string;
+
+  constructor(opts: TariffShieldApiOptions) {
+    this.baseUrl = opts.baseUrl.replace(/\/$/, '');
+    this.apiKey = opts.apiKey;
+    this.sessionToken = opts.sessionToken;
+  }
+
+  getHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (this.apiKey) {
+      headers['X-Api-Key'] = this.apiKey;
+      headers['Authorization'] = `Bearer ${this.apiKey}`;
+    } else if (this.sessionToken) {
+      headers['Authorization'] = `Bearer ${this.sessionToken}`;
+    }
+    return headers;
+  }
+
+  async request<T>(path: string, init?: RequestInit): Promise<T> {
+    const url = `${this.baseUrl}${path.startsWith('/') ? path : `/${path}`}`;
+    const headers = {
+      ...this.getHeaders(),
+      ...(init?.headers as Record<string, string> | undefined),
+    };
+    const res = await fetch(url, { ...init, headers });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error((body as any).error || `Request failed with status ${res.status}`);
+    }
+    return res.json() as Promise<T>;
+  }
+
+  async getImporter(importerId: string) {
+    return this.request(`/importers/${importerId}`);
+  }
+
+  async getCollateralHistory(importerId: string) {
+    return this.request(`/importers/${importerId}/collateral-history`);
+  }
+
+  async createDepositSchedule(
+    importerId: string,
+    data: { cadence: 'weekly' | 'monthly'; amountStroops: string; bucket?: string; startDate?: string }
+  ) {
+    return this.request(`/importers/${importerId}/deposit-schedule`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async scheduleWithdrawal(
+    importerId: string,
+    data: { amountStroops: string; targetDate: string; targetAddress?: string }
+  ) {
+    return this.request(`/importers/${importerId}/scheduled-withdrawals`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async createApiKey(data: { label?: string; scopes?: string[]; rateLimitPerMin?: number; expiresInDays?: number }) {
+    return this.request('/account/api-keys', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async listApiKeys() {
+    return this.request('/account/api-keys');
+  }
+
+  async revokeApiKey(keyId: string) {
+    return this.request(`/account/api-keys/${keyId}/revoke`, {
+      method: 'POST',
+    });
+  }
+
+  async createWebhookSubscription(
+    importerId: string,
+    data: { targetUrl: string; eventTypes: ('deposit' | 'top_up' | 'clawback')[] }
+  ) {
+    return this.request(`/importers/${importerId}/webhook-subscriptions`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async listWebhookSubscriptions(importerId: string, eventType?: string) {
+    const query = eventType ? `?eventType=${encodeURIComponent(eventType)}` : '';
+    return this.request(`/importers/${importerId}/webhook-subscriptions${query}`);
+  }
+
+  async deleteWebhookSubscription(importerId: string, subId: string) {
+    return this.request(`/importers/${importerId}/webhook-subscriptions/${subId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async listWebhookDeliveries(
+    importerId: string,
+    opts?: { subscriptionId?: string; limit?: number }
+  ) {
+    const params = new URLSearchParams();
+    if (opts?.subscriptionId) params.set('subscriptionId', opts.subscriptionId);
+    if (opts?.limit) params.set('limit', String(opts.limit));
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return this.request(`/importers/${importerId}/webhook-deliveries${query}`);
+  }
+}
+
 export interface TariffShieldClientOptions {
-  rpcUrl: string;
-  contractId: string;
-  networkPassphrase: string;
+  rpcUrl?: string;
+  contractId?: string;
+  networkPassphrase?: string;
+  /** Optional: REST API endpoint URL */
+  apiUrl?: string;
+  /** Optional: API key for authenticating REST API calls (#995) */
+  apiKey?: string;
+  /** Optional: Session token for authenticating REST API calls */
+  sessionToken?: string;
   /** Optional: allow tests to override the timeout. */
   txTimeoutSeconds?: number;
   /** Optional: custom rpc.Server instance */
@@ -76,15 +204,24 @@ export class TariffShieldClient {
   private readonly networkPassphrase: string;
   private readonly txTimeoutSeconds: number;
   private readonly compatibilityPromise: Promise<void> | null;
+  public readonly api?: TariffShieldApiClient;
 
   constructor(opts: TariffShieldClientOptions) {
+    if (opts.apiUrl) {
+      this.api = new TariffShieldApiClient({
+        baseUrl: opts.apiUrl,
+        apiKey: opts.apiKey,
+        sessionToken: opts.sessionToken,
+      });
+    }
+
     this.server =
-      opts.server ?? new rpc.Server(opts.rpcUrl, { allowHttp: opts.rpcUrl.startsWith('http://') });
-    this.contract = new Contract(opts.contractId);
-    this.networkPassphrase = opts.networkPassphrase;
+      opts.server ?? (opts.rpcUrl ? new rpc.Server(opts.rpcUrl, { allowHttp: opts.rpcUrl.startsWith('http://') }) : (null as any));
+    this.contract = opts.contractId ? new Contract(opts.contractId) : (null as any);
+    this.networkPassphrase = opts.networkPassphrase ?? '';
     this.txTimeoutSeconds = opts.txTimeoutSeconds ?? 30;
 
-    if (!opts.skipCompatibilityCheck) {
+    if (!opts.skipCompatibilityCheck && this.contract) {
       const sdkVer = opts.sdkVersion ?? '0.1.0';
       this.compatibilityPromise = (async () => {
         try {
@@ -290,10 +427,27 @@ export class TariffShieldClient {
     return scValToNative(raw) as string;
   }
 
+  async getOracleSigners(): Promise<string[]> {
+    const raw = await this.simulate('get_oracle_signers', []);
+    const scArray = scValToNative(raw) as string[];
+    return scArray;
+  }
+
+  async updateOracleSigners(
+    signer: Keypair,
+    newSigners: string[],
+    approvals: string[]
+  ): Promise<InvokeResult<void>> {
+    const scNewSigners = nativeToScVal(newSigners.map((s) => new Address(s)));
+    const scApprovals = nativeToScVal(approvals.map((s) => new Address(s)));
+    return this.invokeAndSubmit(signer, 'update_oracle_signers', [scNewSigners, scApprovals]);
+  }
+
   async version(): Promise<string> {
     const raw = await this.simulate('version', []);
     return scValToNative(raw) as string;
   }
+
 
   // ----- Internals -----
 
@@ -414,6 +568,59 @@ export class TariffShieldClient {
 
 function addressToScVal(addr: string): xdr.ScVal {
   return new Address(addr).toScVal();
+}
+
+/**
+ * Verifies an incoming TariffShield webhook request signature.
+ *
+ * @param payload Raw HTTP request body string or Buffer
+ * @param signatureHeader X-TariffShield-Signature header value (e.g. t=1234567,v1=abcdef...)
+ * @param secret Webhook subscription secret key
+ * @param toleranceSeconds Max allowed age in seconds to prevent replay attacks (default 300s)
+ */
+export function verifyWebhookSignature(
+  payload: string | Buffer,
+  signatureHeader: string,
+  secret: string,
+  toleranceSeconds = 300
+): boolean {
+  if (!signatureHeader || !secret) return false;
+
+  const parts = signatureHeader.split(',');
+  let timestampStr: string | null = null;
+  let signature: string | null = null;
+
+  for (const part of parts) {
+    const [key, value] = part.split('=');
+    if (key === 't') timestampStr = value ?? null;
+    if (key === 'v1') signature = value ?? null;
+  }
+
+  if (!timestampStr || !signature) return false;
+
+  const timestamp = parseInt(timestampStr, 10);
+  if (isNaN(timestamp)) return false;
+
+  if (toleranceSeconds > 0) {
+    const now = Math.floor(Date.now() / 1000);
+    if (Math.abs(now - timestamp) > toleranceSeconds) {
+      return false;
+    }
+  }
+
+  const body = typeof payload === 'string' ? payload : payload.toString('utf8');
+  const signedPayload = `${timestampStr}.${body}`;
+
+  // NodeJS / ESM environment HMAC verification
+  if (typeof process !== 'undefined' && process.versions && process.versions.node) {
+    try {
+      const crypto = require('crypto');
+      const expected = crypto.createHmac('sha256', secret).update(signedPayload).digest('hex');
+      return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
+    } catch {}
+  }
+
+  return false;
 }
 
 export {

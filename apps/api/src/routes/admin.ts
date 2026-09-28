@@ -12,6 +12,7 @@ import { platformKeypair, oracleKeypair, contractClient, explorerTx } from '../s
 import { bustHtsCache } from '../services/hts-rate-validator.js';
 import { buildDisputeRecommendation } from '../services/dispute-recommendation.js';
 import { NOTIFICATION_KINDS } from '../constants/notification-kinds.js';
+import { s3KeyDecrypt, generatePresignedUrl } from './kyc.js';
 
 export const adminRouter = Router();
 adminRouter.use(authMiddleware);
@@ -35,7 +36,7 @@ const AuditLogQuerySchema = z.object({
 adminRouter.get('/audit-log', requireRole('surety_admin'), async (req: Request, res: Response) => {
   const parse = AuditLogQuerySchema.safeParse(req.query);
   if (!parse.success) {
-    res.status(400).json({ error: 'invalid query params', details: parse.error.issues });
+    res.status(400).json({ error: 'invalid input', target: 'query', details: parse.error.issues });
     return;
   }
   const {
@@ -236,7 +237,7 @@ adminRouter.post(
       .safeParse(req.body);
 
     if (!parse.success) {
-      res.status(400).json({ error: 'invalid input', details: parse.error.issues });
+      res.status(400).json({ error: 'invalid input', target: 'body', details: parse.error.issues });
       return;
     }
     const { versionId, effectiveDate, changeSummary, policyText, requiresReacceptance } =
@@ -300,7 +301,7 @@ adminRouter.post(
       .safeParse(req.body);
 
     if (!parse.success) {
-      res.status(400).json({ error: 'invalid input', details: parse.error.issues });
+      res.status(400).json({ error: 'invalid input', target: 'body', details: parse.error.issues });
       return;
     }
 
@@ -345,7 +346,7 @@ adminRouter.get(
   async (req: Request, res: Response) => {
     const parse = OracleFeedQuerySchema.safeParse(req.query);
     if (!parse.success) {
-      res.status(400).json({ error: 'invalid query params', details: parse.error.issues });
+      res.status(400).json({ error: 'invalid input', target: 'query', details: parse.error.issues });
       return;
     }
     const { importer_id, from, to, page, per_page } = parse.data;
@@ -421,7 +422,7 @@ adminRouter.get(
     const filterSchema = OracleFeedQuerySchema.omit({ page: true, per_page: true });
     const parse = filterSchema.safeParse(req.query);
     if (!parse.success) {
-      res.status(400).json({ error: 'invalid query params', details: parse.error.issues });
+      res.status(400).json({ error: 'invalid input', target: 'query', details: parse.error.issues });
       return;
     }
     const { importer_id, from, to } = parse.data;
@@ -563,7 +564,7 @@ adminRouter.post(
   async (req: Request, res: Response) => {
     const parse = BatchAutoTopUpSchema.safeParse(req.body ?? {});
     if (!parse.success) {
-      res.status(400).json({ error: 'invalid input', details: parse.error.issues });
+      res.status(400).json({ error: 'invalid input', target: 'body', details: parse.error.issues });
       return;
     }
     const { importer_ids } = parse.data;
@@ -662,7 +663,7 @@ adminRouter.post('/credit-lines', requireRole('surety_admin'), async (req: Reque
   const user = (req as AuthedRequest).user;
   const parse = GrantCreditLineSchema.safeParse(req.body ?? {});
   if (!parse.success) {
-    res.status(400).json({ error: 'invalid input', details: parse.error.issues });
+    res.status(400).json({ error: 'invalid input', target: 'body', details: parse.error.issues });
     return;
   }
   const { importerId, amount, expiresAt, durationHours, reason } = parse.data;
@@ -725,7 +726,7 @@ const ListCreditLinesQuerySchema = z.object({
 adminRouter.get('/credit-lines', requireRole('surety_admin'), async (req: Request, res: Response) => {
   const parse = ListCreditLinesQuerySchema.safeParse(req.query ?? {});
   if (!parse.success) {
-    res.status(400).json({ error: 'invalid query params', details: parse.error.issues });
+    res.status(400).json({ error: 'invalid input', target: 'query', details: parse.error.issues });
     return;
   }
 
@@ -762,7 +763,7 @@ adminRouter.post(
     const user = (req as AuthedRequest).user;
     const parse = z.object({ reason: z.string().max(500).optional() }).safeParse(req.body ?? {});
     if (!parse.success) {
-      res.status(400).json({ error: 'invalid input', details: parse.error.issues });
+      res.status(400).json({ error: 'invalid input', target: 'body', details: parse.error.issues });
       return;
     }
 
@@ -809,7 +810,88 @@ adminRouter.get(
        WHERE cd.status = 'open'
        ORDER BY cd.raised_at DESC`
     );
-    res.json({ disputes: result.rows });
+
+    // #992: Surface evidence list to surety_admin before calling resolve_dispute
+    const disputeIds = result.rows.map((d) => d.id);
+    const evidenceByDispute = new Map<string, any[]>();
+    if (disputeIds.length > 0) {
+      const evResult = await pool.query(
+        `SELECT id, dispute_id, importer_id, file_name, mime_type, file_size_bytes,
+                s3_key_encrypted, virus_scan_status, notes, created_at
+         FROM dispute_evidence
+         WHERE dispute_id = ANY($1::uuid[])
+         ORDER BY created_at ASC`,
+        [disputeIds]
+      );
+      for (const ev of evResult.rows) {
+        const list = evidenceByDispute.get(ev.dispute_id) ?? [];
+        list.push({
+          id: ev.id,
+          disputeId: ev.dispute_id,
+          importerId: ev.importer_id,
+          fileName: ev.file_name,
+          mimeType: ev.mime_type,
+          fileSizeBytes: ev.file_size_bytes,
+          virusScanStatus: ev.virus_scan_status,
+          notes: ev.notes,
+          createdAt: ev.created_at,
+          downloadUrl: ev.s3_key_encrypted
+            ? generatePresignedUrl(s3KeyDecrypt(ev.s3_key_encrypted))
+            : null,
+        });
+        evidenceByDispute.set(ev.dispute_id, list);
+      }
+    }
+
+    const disputes = result.rows.map((d) => ({
+      ...d,
+      evidence: evidenceByDispute.get(d.id) ?? [],
+    }));
+
+    res.json({ disputes });
+  }
+);
+
+// GET /disputes/:id/evidence — surety_admin views evidence for a specific dispute before resolving (#992)
+adminRouter.get(
+  '/disputes/:id/evidence',
+  requireRole('surety_admin'),
+  async (req: Request, res: Response) => {
+    const disputeId = String(req.params.id ?? '');
+    const dispute = await pool.query(
+      `SELECT cd.id, cd.importer_id, cd.status, i.legal_name, i.stellar_address
+       FROM collateral_disputes cd
+       JOIN importers i ON i.id = cd.importer_id
+       WHERE cd.id = $1`,
+      [disputeId]
+    );
+    if (!dispute.rowCount) {
+      res.status(404).json({ error: 'dispute not found' });
+      return;
+    }
+    const evidenceRes = await pool.query(
+      `SELECT id, dispute_id, importer_id, file_name, mime_type, file_size_bytes,
+              s3_key_encrypted, virus_scan_status, notes, created_at
+       FROM dispute_evidence
+       WHERE dispute_id = $1
+       ORDER BY created_at ASC`,
+      [disputeId]
+    );
+    const evidence = evidenceRes.rows.map((row) => ({
+      id: row.id,
+      disputeId: row.dispute_id,
+      importerId: row.importer_id,
+      fileName: row.file_name,
+      mimeType: row.mime_type,
+      fileSizeBytes: row.file_size_bytes,
+      virusScanStatus: row.virus_scan_status,
+      notes: row.notes,
+      createdAt: row.created_at,
+      downloadUrl: row.s3_key_encrypted
+        ? generatePresignedUrl(s3KeyDecrypt(row.s3_key_encrypted))
+        : null,
+    }));
+    res.json({ dispute: dispute.rows[0], evidence });
   }
 );
 
@@ -843,7 +925,7 @@ adminRouter.post(
     const user = (req as AuthedRequest).user;
     const parse = ResolveDisputeSchema.safeParse(req.body ?? {});
     if (!parse.success) {
-      res.status(400).json({ error: 'invalid input', details: parse.error.issues });
+      res.status(400).json({ error: 'invalid input', target: 'body', details: parse.error.issues });
       return;
     }
     const { accept, note } = parse.data;
@@ -904,3 +986,183 @@ adminRouter.post(
     res.json({ dispute: updated.rows[0], txUrl: explorerTx(onChain.txHash) });
   }
 );
+
+// ── #1018: Oracle Signer Rotation Workflow Endpoints ─────────────────────────
+
+const ProposeRotationSchema = z.object({
+  newSigners: z.array(z.string().length(56)).length(3),
+});
+
+// POST /admin/oracle-signers/propose — propose a new set of 3 oracle signers
+adminRouter.post('/oracle-signers/propose', requireRole('surety_admin'), async (req: Request, res: Response) => {
+  const user = (req as AuthedRequest).user;
+  const parse = ProposeRotationSchema.safeParse(req.body);
+  if (!parse.success) {
+    res.status(400).json({ error: 'invalid input', target: 'body', details: parse.error.issues });
+    return;
+  }
+  const { newSigners } = parse.data;
+
+  // Enforce distinct signers
+  if (new Set(newSigners).size !== 3) {
+    res.status(400).json({ error: 'new signers must be 3 distinct Stellar addresses' });
+    return;
+  }
+
+  try {
+    const inserted = await pool.query(
+      `INSERT INTO oracle_signer_rotations (proposed_by, new_signers, threshold, status)
+       VALUES ($1, $2, 2, 'pending_signatures')
+       RETURNING id, proposed_by, new_signers, threshold, approvals, status, created_at`,
+      [user.id, JSON.stringify(newSigners)]
+    );
+
+    await logAudit(user.id, 'oracle_signer_rotation_proposed', inserted.rows[0].id, { newSigners });
+
+    res.status(201).json({ proposal: inserted.rows[0] });
+  } catch (err: any) {
+    console.error('[admin] failed to propose oracle signer rotation:', err);
+    res.status(500).json({ error: 'failed to create signer rotation proposal' });
+  }
+});
+
+// GET /admin/oracle-signers/active — get active proposal and on-chain signers
+adminRouter.get('/oracle-signers/active', requireRole('surety_admin'), async (_req: Request, res: Response) => {
+  try {
+    const proposalRes = await pool.query(
+      `SELECT id, proposed_by, new_signers, threshold, approvals, status, created_at
+       FROM oracle_signer_rotations
+       WHERE status = 'pending_signatures'
+       ORDER BY created_at DESC LIMIT 1`
+    );
+
+    let onChainSigners: string[] = [];
+    try {
+      onChainSigners = await contractClient.getOracleSigners();
+    } catch {
+      // Fallback if contract client mock/network is unavailable
+      onChainSigners = [];
+    }
+
+    res.json({
+      activeProposal: proposalRes.rows[0] ?? null,
+      onChainSigners,
+    });
+  } catch (err: any) {
+    console.error('[admin] failed to fetch active oracle signer rotation:', err);
+    res.status(500).json({ error: 'failed to fetch active rotation proposal' });
+  }
+});
+
+// POST /admin/oracle-signers/:id/approve — add approval to proposal
+adminRouter.post('/oracle-signers/:id/approve', requireRole('surety_admin'), async (req: Request, res: Response) => {
+  const user = (req as AuthedRequest).user;
+  const proposalId = req.params.id;
+
+  try {
+    const proposalRes = await pool.query(
+      `SELECT id, approvals, threshold, status FROM oracle_signer_rotations WHERE id = $1 AND status = 'pending_signatures'`,
+      [proposalId]
+    );
+
+    if (!proposalRes.rowCount) {
+      res.status(404).json({ error: 'active proposal not found' });
+      return;
+    }
+
+    const proposal = proposalRes.rows[0];
+    const approvals: Array<{ approverId: string; approvedAt: string }> = proposal.approvals || [];
+
+    if (approvals.some((a) => a.approverId === user.id)) {
+      res.status(409).json({ error: 'you have already approved this proposal' });
+      return;
+    }
+
+    approvals.push({ approverId: user.id, approvedAt: new Date().toISOString() });
+
+    const updated = await pool.query(
+      `UPDATE oracle_signer_rotations SET approvals = $1 WHERE id = $2 RETURNING id, new_signers, threshold, approvals, status`,
+      [JSON.stringify(approvals), proposalId]
+    );
+
+    await logAudit(user.id, 'oracle_signer_rotation_approved', proposalId, { approvalCount: approvals.length });
+
+    res.json({ proposal: updated.rows[0] });
+  } catch (err: any) {
+    console.error('[admin] failed to approve oracle signer rotation:', err);
+    res.status(500).json({ error: 'failed to submit approval' });
+  }
+});
+
+// POST /admin/oracle-signers/:id/execute — execute signer rotation on-chain
+adminRouter.post('/oracle-signers/:id/execute', requireRole('surety_admin'), async (req: Request, res: Response) => {
+  const user = (req as AuthedRequest).user;
+  const proposalId = req.params.id;
+
+  try {
+    const proposalRes = await pool.query(
+      `SELECT id, new_signers, threshold, approvals, status FROM oracle_signer_rotations WHERE id = $1 AND status = 'pending_signatures'`,
+      [proposalId]
+    );
+
+    if (!proposalRes.rowCount) {
+      res.status(404).json({ error: 'active proposal not found' });
+      return;
+    }
+
+    const proposal = proposalRes.rows[0];
+    const approvals = proposal.approvals || [];
+
+    if (approvals.length < proposal.threshold) {
+      res.status(400).json({ error: `insufficient approvals: need ${proposal.threshold}, got ${approvals.length}` });
+      return;
+    }
+
+    const newSigners: string[] = typeof proposal.new_signers === 'string' ? JSON.parse(proposal.new_signers) : proposal.new_signers;
+
+    const onChain = await contractClient.updateOracleSigners(
+      platformKeypair,
+      newSigners,
+      [platformKeypair.publicKey(), oracleKeypair.publicKey()]
+    );
+
+    const updated = await pool.query(
+      `UPDATE oracle_signer_rotations
+       SET status = 'executed', tx_hash = $1, executed_at = NOW()
+       WHERE id = $2
+       RETURNING id, new_signers, status, tx_hash, executed_at`,
+      [onChain.txHash, proposalId]
+    );
+
+    await logAudit(user.id, 'oracle_signer_rotation_executed', proposalId, {
+      txHash: onChain.txHash,
+      newSigners,
+    });
+
+    res.json({
+      proposal: updated.rows[0],
+      txUrl: explorerTx(onChain.txHash),
+    });
+  } catch (err: any) {
+    console.error('[admin] failed to execute oracle signer rotation:', err);
+    res.status(500).json({ error: 'failed to execute signer rotation on-chain' });
+  }
+});
+
+// GET /admin/oracle-signers/history — rotation audit history
+adminRouter.get('/oracle-signers/history', requireRole('surety_admin'), async (_req: Request, res: Response) => {
+  try {
+    const historyRes = await pool.query(
+      `SELECT r.id, r.proposed_by, u.email AS proposed_by_email, r.new_signers, r.threshold, r.approvals, r.status, r.tx_hash, r.created_at, r.executed_at
+       FROM oracle_signer_rotations r
+       LEFT JOIN users u ON u.id = r.proposed_by
+       ORDER BY r.created_at DESC LIMIT 50`
+    );
+
+    res.json({ history: historyRes.rows });
+  } catch (err: any) {
+    console.error('[admin] failed to fetch oracle signer rotation history:', err);
+    res.status(500).json({ error: 'failed to fetch rotation history' });
+  }
+});
+

@@ -19,11 +19,13 @@ const action = process.argv[2] === 'rollback' ? 'rollback' : 'up';
 try {
   if (action === 'rollback') {
     await rollback();
+    console.log('Migration rollback completed successfully.');
   } else {
     await migrate();
+    console.log('Migration apply completed successfully.');
   }
 } catch (err) {
-  console.error('Migration command failed:', err);
+  console.error(`Migration ${action} failed:`, err);
   process.exit(1);
 } finally {
   await pool.end();

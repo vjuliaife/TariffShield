@@ -1,5 +1,6 @@
 /**
- * Tests for the pool configuration and GET /health/db endpoint added by #241.
+ * Tests for the pool configuration and GET /health/db endpoint added by #241,
+ * and the JSON bodies of GET /health/live and /health/ready (#973).
  *
  * Run via: node --import tsx/esm --test src/__tests__/integration/health-db.test.ts
  *
@@ -49,7 +50,7 @@ describe('db pool configuration (#241)', () => {
 });
 
 describe('GET /health/db route (#241)', () => {
-  it('reports status failed with pool stats when the database is unreachable', async () => {
+  it('reports status degraded with pool stats when the database is unreachable', async () => {
     const { healthRouter } = await import('../../routes/health.js');
     const layer = (healthRouter.stack as any[]).find(
       (l) => l.route?.path === '/db' && l.route.methods.get
@@ -74,8 +75,51 @@ describe('GET /health/db route (#241)', () => {
 
     assert.equal(statusCode, 503);
     assert.deepEqual(body, {
-      status: 'failed',
+      status: 'degraded',
+      db: 'failed',
       pool: { totalCount: 0, idleCount: 0, waitingCount: 0 },
     });
+  });
+});
+
+// #973 — /live and /ready return JSON with a `status` field, like / and /db.
+function findGetHandler(healthRouter: any, path: string) {
+  const layer = (healthRouter.stack as any[]).find(
+    (l) => l.route?.path === path && l.route.methods.get
+  );
+  assert.ok(layer, `GET ${path} route must be registered on healthRouter`);
+  return layer.route.stack[0].handle;
+}
+
+function mockRes() {
+  const captured: { statusCode: number; body: unknown } = { statusCode: 200, body: undefined };
+  const res = {
+    status(code: number) {
+      captured.statusCode = code;
+      return this;
+    },
+    json(payload: unknown) {
+      captured.body = payload;
+      return this;
+    },
+  };
+  return { res, captured };
+}
+
+describe('GET /health/live and /health/ready JSON bodies (#973)', () => {
+  it('/live returns 200 with { status: "ok" }', async () => {
+    const { healthRouter } = await import('../../routes/health.js');
+    const { res, captured } = mockRes();
+    await findGetHandler(healthRouter, '/live')({} as any, res as any, (() => {}) as any);
+    assert.equal(captured.statusCode, 200);
+    assert.deepEqual(captured.body, { status: 'ok' });
+  });
+
+  it('/ready returns 503 with { status: "degraded" } when a dependency is unreachable', async () => {
+    const { healthRouter } = await import('../../routes/health.js');
+    const { res, captured } = mockRes();
+    await findGetHandler(healthRouter, '/ready')({} as any, res as any, (() => {}) as any);
+    assert.equal(captured.statusCode, 503);
+    assert.deepEqual(captured.body, { status: 'degraded' });
   });
 });

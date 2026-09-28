@@ -2,24 +2,26 @@ import './tracing.js';
 import './instrument.js';
 import { createTxSubmitWorker } from './queue.js';
 import { pool } from './db.js';
+import { logger } from './lib/logger.js';
 
 const worker = createTxSubmitWorker();
 
 worker.on('completed', (job) => {
-  console.log(
-    `[worker] job ${job.id} completed: ${job.data.method} for importer ${job.data.importerId}`
+  logger.info(
+    { jobId: job.id, method: job.data.method, importerId: job.data.importerId },
+    `[worker] job ${job.id} completed`
   );
 });
 
 worker.on('failed', (job, err) => {
-  console.error(`[worker] job ${job?.id} failed:`, err.message);
+  logger.error({ jobId: job?.id, err }, `[worker] job ${job?.id} failed`);
 });
 
 process.on('SIGTERM', async () => {
-  console.log('[worker] SIGTERM received, shutting down gracefully...');
+  logger.info('[worker] SIGTERM received, shutting down gracefully...');
   await worker.close();
   await pool.end();
   process.exit(0);
 });
 
-console.log('[worker] started, waiting for jobs...');
+logger.info('[worker] started, waiting for jobs...');

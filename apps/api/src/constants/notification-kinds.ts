@@ -20,6 +20,16 @@ export const NOTIFICATION_KINDS = {
   // #1009 — multi-step review chain outcome for the importer
   REVIEW_CHAIN_APPROVED: 'review_chain_approved',
   REVIEW_CHAIN_REJECTED: 'review_chain_rejected',
+  REPORT_DELIVERY_FAILED: 'report_delivery_failed',
+  // #993 — deposit scheduling notifications
+  SCHEDULED_DEPOSIT_FAILED: 'scheduled_deposit_failed',
+  SCHEDULED_DEPOSIT_SUCCESS: 'scheduled_deposit_success',
+  // #994 — scheduled withdrawal notifications
+  SCHEDULED_WITHDRAWAL_EXECUTED: 'scheduled_withdrawal_executed',
+  SCHEDULED_WITHDRAWAL_BLOCKED: 'scheduled_withdrawal_blocked',
+  // #991 — support ticket thread activity
+  TICKET_REPLY: 'ticket_reply',
+  TICKET_STATUS_CHANGED: 'ticket_status_changed',
 } as const;
 
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[keyof typeof NOTIFICATION_KINDS];

@@ -5,6 +5,7 @@ import {
   CURRENT_KEY_VERSION,
   type EncryptedValue,
 } from '../lib/field-encryption.js';
+import { logger } from '../lib/logger.js';
 
 // Rolling re-encryption job (#314): updates all importer EIN values encrypted with
 // an older key version to use the current version. Runs in-process; for large
@@ -18,11 +19,11 @@ export async function reencryptImporterEins(): Promise<void> {
   );
 
   if (!rows.rowCount) {
-    console.log('[reencrypt] all EIN fields are up-to-date');
+    logger.info('[reencrypt] all EIN fields are up-to-date');
     return;
   }
 
-  console.log(`[reencrypt] re-encrypting ${rows.rowCount} importer EIN records`);
+  logger.info({ count: rows.rowCount }, `[reencrypt] re-encrypting ${rows.rowCount} importer EIN records`);
   let updated = 0;
   let failed = 0;
 
@@ -38,10 +39,10 @@ export async function reencryptImporterEins(): Promise<void> {
       );
       updated++;
     } catch (err) {
-      console.error(`[reencrypt] failed for importer ${row.id}:`, err);
+      logger.error({ importerId: row.id, err }, `[reencrypt] failed for importer ${row.id}`);
       failed++;
     }
   }
 
-  console.log(`[reencrypt] done — updated: ${updated}, failed: ${failed}`);
+  logger.info({ updated, failed }, `[reencrypt] done — updated: ${updated}, failed: ${failed}`);
 }

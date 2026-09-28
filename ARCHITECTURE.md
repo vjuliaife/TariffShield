@@ -2,6 +2,10 @@
 
 A single Soroban smart contract on Stellar is the system of record for customs-bond collateral. Everything else — TypeScript SDK, Express API, Postgres mirror, Next.js dashboard — is off-chain orchestration around that contract.
 
+Per-feature design specs (importer team members and RBAC, collateral health
+alert thresholds, oracle signer rotation, tariff rate history) are in
+[docs/feature-design-notes.md](docs/feature-design-notes.md).
+
 ---
 
 ## 1. System topology

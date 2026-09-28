@@ -40,7 +40,7 @@ Operational procedures for surety admins and platform operators. Covers the emer
    ```
    GET /health/ready
    ```
-   Expected: `200 OK`
+   Expected: `200` with body `{ "status": "ok" }`
 
 3. Pull live collateral status for the target importer:
    ```

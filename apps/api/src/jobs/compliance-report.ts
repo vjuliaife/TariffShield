@@ -1,5 +1,6 @@
 import { pool } from '../db.js';
 import { env } from '../config/env.js';
+import { logger } from '../lib/logger.js';
 
 // Monthly compliance report generation job (#319).
 // Scheduled to run on the first business day of each month.
@@ -157,7 +158,7 @@ export function presignReportUrl(key: string): string {
 // Stub: in production, use SendGrid/SES to email surety_admin users.
 async function notifySuretyAdmins(suretyId: string, reportMonth: string): Promise<void> {
   if (!env.SENDGRID_API_KEY) {
-    console.log(`[compliance-report] would email surety ${suretyId} re: ${reportMonth} report`);
+    logger.info({ suretyId, reportMonth }, `[compliance-report] would email surety ${suretyId} re: ${reportMonth} report`);
     return;
   }
   // Production: fetch surety_admin emails, send via SendGrid
@@ -194,9 +195,9 @@ export async function generateMonthlyComplianceReport(targetMonth?: Date): Promi
       );
 
       await notifySuretyAdmins(suretyId, reportMonthDate);
-      console.log(`[compliance-report] generated ${reportMonthDate} report for surety ${suretyId}`);
+      logger.info({ suretyId, reportMonth: reportMonthDate }, `[compliance-report] Report execution: Generated ${reportMonthDate} for surety ${suretyId}`);
     } catch (err) {
-      console.error(`[compliance-report] failed for surety ${suretyId}:`, err);
+      logger.error({ suretyId, err }, `[compliance-report] Report execution failed for surety ${suretyId}`);
     }
   }
 }
@@ -219,16 +220,16 @@ export function startComplianceReportScheduler(): void {
   async function tick() {
     const now = new Date();
     if (now.getUTCHours() === 6 && isFirstBusinessDayOfMonth(now)) {
-      console.log('[compliance-report] triggering monthly report generation');
+      logger.info('[compliance-report] Scheduler: Triggering monthly report generation');
       await generateMonthlyComplianceReport(now).catch((err) =>
-        console.error('[compliance-report] scheduler error:', err)
+        logger.error({ err }, '[compliance-report] Scheduler error during report generation')
       );
     }
   }
 
   setInterval(() => {
-    tick().catch((err) => console.error('[compliance-report] tick error:', err));
+    tick().catch((err) => logger.error({ err }, '[compliance-report] Scheduler tick error'));
   }, CHECK_INTERVAL_MS);
 
-  console.log('[compliance-report] scheduler started');
+  logger.info('[compliance-report] Scheduler started');
 }

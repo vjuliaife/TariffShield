@@ -634,6 +634,108 @@ export async function rollback(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_collateral_disputes_importer
       ON collateral_disputes(importer_id, raised_at DESC);
 
+    -- #992: dispute evidence attachments
+    CREATE TABLE IF NOT EXISTS dispute_evidence (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      dispute_id UUID NOT NULL REFERENCES collateral_disputes(id) ON DELETE CASCADE,
+      importer_id UUID NOT NULL REFERENCES importers(id) ON DELETE CASCADE,
+      file_name TEXT,
+      mime_type TEXT,
+      file_size_bytes INTEGER,
+      s3_key_encrypted TEXT,
+      virus_scan_status TEXT DEFAULT 'clean',
+      notes TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dispute_evidence_dispute
+      ON dispute_evidence(dispute_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_dispute_evidence_importer
+      ON dispute_evidence(importer_id, created_at DESC);
+
+    -- #993: recurring deposit schedules
+    CREATE TABLE IF NOT EXISTS deposit_schedules (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      importer_id UUID NOT NULL REFERENCES importers(id) ON DELETE CASCADE,
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      cadence TEXT NOT NULL CHECK (cadence IN ('weekly', 'monthly')),
+      amount_stroops NUMERIC(20, 0) NOT NULL,
+      bucket TEXT NOT NULL DEFAULT 'collateral' CHECK (bucket IN ('collateral', 'reserve')),
+      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'paused', 'cancelled')),
+      next_run_at TIMESTAMPTZ NOT NULL,
+      last_run_at TIMESTAMPTZ,
+      last_error TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_deposit_schedules_importer
+      ON deposit_schedules(importer_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_deposit_schedules_due
+      ON deposit_schedules(next_run_at) WHERE status = 'active';
+
+    CREATE TABLE IF NOT EXISTS deposit_schedule_executions (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      schedule_id UUID NOT NULL REFERENCES deposit_schedules(id) ON DELETE CASCADE,
+      importer_id UUID NOT NULL REFERENCES importers(id) ON DELETE CASCADE,
+      amount_stroops NUMERIC(20, 0) NOT NULL,
+      bucket TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('success', 'failed', 'skipped')),
+      job_id TEXT,
+      error_message TEXT,
+      executed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_deposit_schedule_executions_schedule
+      ON deposit_schedule_executions(schedule_id, executed_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_deposit_schedule_executions_importer
+      ON deposit_schedule_executions(importer_id, executed_at DESC);
+
+    -- #994: future-dated staged withdrawal scheduling
+    CREATE TABLE IF NOT EXISTS scheduled_withdrawals (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      importer_id UUID NOT NULL REFERENCES importers(id) ON DELETE CASCADE,
+      requested_by UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      amount_stroops NUMERIC(20, 0) NOT NULL,
+      target_date TIMESTAMPTZ NOT NULL,
+      target_address TEXT,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'executed', 'blocked', 'cancelled')),
+      execution_result TEXT,
+      executed_at TIMESTAMPTZ,
+      job_id TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_scheduled_withdrawals_importer
+      ON scheduled_withdrawals(importer_id, target_date ASC);
+    CREATE INDEX IF NOT EXISTS idx_scheduled_withdrawals_due
+      ON scheduled_withdrawals(target_date) WHERE status = 'pending';
+
+    -- #995: self-service API key management
+    CREATE TABLE IF NOT EXISTS api_keys (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      importer_id UUID REFERENCES importers(id) ON DELETE CASCADE,
+      key_hash TEXT NOT NULL UNIQUE,
+      prefix TEXT NOT NULL,
+      label TEXT,
+      scopes TEXT[] NOT NULL DEFAULT '{}',
+      rate_limit_per_min INTEGER DEFAULT 60,
+      last_used_at TIMESTAMPTZ,
+      expires_at TIMESTAMPTZ,
+      revoked_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS importer_id UUID REFERENCES importers(id) ON DELETE CASCADE;
+    ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS rate_limit_per_min INTEGER DEFAULT 60;
+
+    CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id);
+    CREATE INDEX IF NOT EXISTS idx_api_keys_importer_id ON api_keys(importer_id);
+    CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
+
     -- Oracle price feed: durable audit trail of every set_required_collateral event.
     CREATE TABLE IF NOT EXISTS oracle_price_feed (
       id                   UUID          PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -771,9 +873,9 @@ export async function rollback(): Promise<void> {
     CREATE POLICY audit_log_no_update ON audit_log FOR UPDATE USING (false);
     CREATE POLICY audit_log_no_delete ON audit_log FOR DELETE USING (false);
 
-    -- #232: bonds — full bond lifecycle tracking (supersedes importers.bond_id)
-    -- NOTE: importers.bond_id is deprecated and retained for backward compatibility.
-    -- All new bond queries should use the bonds table instead.
+    -- #232: bonds — full bond lifecycle tracking (supersedes importers.bond_id).
+    -- See migrations/0004_supplementary_schema.ts for why importers.bond_id
+    -- is deprecated but retained.
     CREATE TABLE IF NOT EXISTS bonds (
       id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
       importer_id UUID NOT NULL REFERENCES importers(id) ON DELETE CASCADE,

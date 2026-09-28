@@ -66,7 +66,7 @@ suretyLicenseRouter.post('/submit', requireSuretyAdmin, async (req: Request, res
   const user = (req as AuthedRequest).user;
   const parse = SubmitSchema.safeParse(req.body);
   if (!parse.success) {
-    res.status(400).json({ error: 'invalid input', details: parse.error.issues });
+    res.status(400).json({ error: 'invalid input', target: 'body', details: parse.error.issues });
     return;
   }
   const { naicNumber, companyName, stateOfDomicile, amBestRating, licenseStatusDetail } =
@@ -138,7 +138,7 @@ suretyLicenseRouter.put('/:id/review', async (req: Request, res: Response) => {
   const reviewer = (req as AuthedRequest).user;
   const parse = ReviewSchema.safeParse(req.body);
   if (!parse.success) {
-    res.status(400).json({ error: 'invalid input', details: parse.error.issues });
+    res.status(400).json({ error: 'invalid input', target: 'body', details: parse.error.issues });
     return;
   }
   const { action, rejectionReason } = parse.data;

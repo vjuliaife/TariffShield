@@ -86,7 +86,7 @@ All DocuSign variables are optional. If not set, bond-signature endpoints operat
 | `DOCUSIGN_ACCOUNT_ID` | No | DocuSign account ID | `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` |
 | `DOCUSIGN_BASE_PATH` | No | DocuSign base API URL. Use demo URL for testing | `https://demo.docusign.net/restapi` |
 | `DOCUSIGN_PRIVATE_KEY` | No | RSA private key for DocuSign JWT grant (PEM format) | `-----BEGIN RSA PRIVATE KEY-----\n...` |
-| `DOCUSIGN_WEBHOOK_HMAC_KEY` | No | HMAC key for verifying DocuSign Connect webhook signatures | `random-64-char-secret` |
+| `DOCUSIGN_WEBHOOK_HMAC_KEY` | No | HMAC key for verifying DocuSign Connect webhook signatures (see [bond-signatures webhook docs](api/bond-signatures.md#signature-verification)) | `random-64-char-secret` |
 
 ### Field-Level Encryption
 

@@ -10,24 +10,6 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 
-// ─── Mock the DB pool before the service module is loaded ─────────────────────
-
-// We need to intercept pool.query calls.  Because the service imports pool from
-// "../db.js" at module scope we patch the module via a simple in-process mock
-// that replaces the named export before the test-subject is imported.
-
-// We use dynamic import + module mocking via the mock.module API (Node 22+).
-// For compatibility down to Node 18 we instead patch the module cache through
-// a re-export shim: the test file imports the validator *after* overriding the
-// pool export via a shared module-level variable.
-//
-// Simpler approach that works with Node 18–22: import the validator directly
-// and spy on the internal `pool` reference by patching its import.  Since ESM
-// doesn't support direct require-cache manipulation we instead expose a
-// test-only seam via a module-level `_setPoolForTest` function defined below.
-//
-// The validator file exports `_setPoolForTest` only when NODE_ENV === 'test'.
-
 // ─── Dynamic import of validator (after env is set) ────────────────────────
 
 let validator: typeof import('./hts-rate-validator.js');
