@@ -142,14 +142,32 @@ export function Nav() {
             )}
           </div>
         </div>
-      </nav>
-
-      {/* #1016 Release Notes / Changelog Slide-over Panel */}
-      {isChangelogOpen && (
-        <div className="fixed inset-0 z-50 flex justify-end bg-black/50 backdrop-blur-sm">
-          <div className="w-full max-w-md bg-card h-full p-6 shadow-xl border-l border-border flex flex-col">
-            <div className="flex items-center justify-between pb-4 border-b border-border">
-              <h2 className="text-lg font-bold text-foreground">Release Notes & Updates</h2>
+        <div className="flex items-center gap-4 text-sm">
+          {user ? (
+            <>
+              <div className="flex flex-col items-start leading-tight">
+                {user.role === 'importer' ? (
+                  <>
+                    <Link href="/app" className="text-foreground hover:text-accent">
+                      Bond dashboard
+                    </Link>
+                    <Link href="/app/settings" className="text-foreground hover:text-accent">
+                      Account settings
+                    </Link>
+                  </>
+                ) : (
+                  <Link href="/surety" className="text-foreground hover:text-accent">
+                    Surety admin
+                  </Link>
+                )}
+                <span
+                  className="text-[11px] text-muted sm:hidden max-w-[130px] truncate"
+                  title={user.email}
+                >
+                  {user.email}
+                </span>
+              </div>
+              <span className="hidden sm:inline text-muted">{user.email}</span>
               <button
                 onClick={() => setIsChangelogOpen(false)}
                 className="text-muted hover:text-foreground text-xl font-bold px-2"

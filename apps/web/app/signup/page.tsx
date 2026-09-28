@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Nav } from '@/components/Nav';
 import { api, ApiError } from '@/lib/api';
 import { setSession } from '@/lib/auth';
@@ -13,16 +13,27 @@ export default function Signup() {
     email: string;
     password: string;
     role: 'importer' | 'surety_admin';
-  }>({ email: '', password: '', role: 'importer' });
+    referralCode: string;
+    accept_tos: boolean;
+  }>({ email: '', password: '', role: 'importer', referralCode: '', accept_tos: false });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const code = new URLSearchParams(window.location.search).get('ref');
+    if (code && /^[a-f0-9]{12}$/i.test(code))
+      setForm((current) => ({ ...current, referralCode: code.toUpperCase() }));
+  }, []);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
     setError(null);
     try {
-      const { token, user } = await api.signup(form);
+      const { token, user } = await api.signup({
+        ...form,
+        referralCode: form.role === 'importer' ? form.referralCode || undefined : undefined,
+      });
       setSession(token, user);
       router.push(user.role === 'surety_admin' ? '/surety' : '/app');
     } catch (err) {
@@ -83,6 +94,30 @@ export default function Signup() {
               minLength={8}
               className="mt-1 block w-full rounded-md border border-border bg-card px-3 py-2 text-sm focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
             />
+          </label>
+          {form.role === 'importer' && (
+            <label className="block">
+              <span className="block text-sm font-medium">
+                Referral code <span className="text-muted">(optional)</span>
+              </span>
+              <input
+                value={form.referralCode}
+                onChange={(e) => setForm({ ...form, referralCode: e.target.value.toUpperCase() })}
+                maxLength={12}
+                pattern="[A-Fa-f0-9]{12}"
+                className="mt-1 block w-full rounded-md border border-border bg-card px-3 py-2 text-sm"
+              />
+            </label>
+          )}
+          <label className="flex items-start gap-2 text-xs text-muted">
+            <input
+              type="checkbox"
+              checked={form.accept_tos}
+              onChange={(e) => setForm({ ...form, accept_tos: e.target.checked })}
+              required
+              className="mt-0.5"
+            />
+            <span>I accept the Terms of Service.</span>
           </label>
           {error ? (
             <p className="rounded border border-danger bg-danger/10 px-3 py-2 text-sm text-danger">
