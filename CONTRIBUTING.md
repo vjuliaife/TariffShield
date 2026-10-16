@@ -12,6 +12,23 @@
 | Docker Desktop | latest | Runs local Postgres via `docker-compose.yml` |
 | PostgreSQL client (`psql`) | any recent | For inspecting the local database directly |
 
+### Toolchain alignment
+
+The project runs on **Node 20**: `.nvmrc`, every CI `node-version`, the
+`apps/*/Dockerfile` base images and the devcontainer all use Node 20. Root
+`engines.node` (`>=20`) starts at the same major. `@types/node` in `apps/api`,
+`apps/web` and `packages/sdk` is pinned to `^20.x`, so code cannot type-check
+against Node 22/24 APIs that do not exist at runtime. To move to a newer
+Node, bump all of these together.
+
+The contract's `ed25519-dalek = "2"` dev-dependency pin works around
+soroban-env-host 22.x leaving dalek unbounded. See the comment in
+`contracts/tariff-shield/Cargo.toml`. Remove the pin when soroban-sdk moves
+to a soroban-env-host that bounds dalek itself.
+
+`npm run check:toolchain` checks both of these and fails on drift. The same
+checks run in `npm run test:scripts`.
+
 ## Development Setup
 
 See [README.md](README.md) for the full walkthrough (Docker Compose, Stellar testnet, contract deployment). Numbered setup from a fresh clone:

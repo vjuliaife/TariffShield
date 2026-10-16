@@ -31,6 +31,7 @@
     "rollback-upgrade": "tsx scripts/rollback-upgrade.ts",
     "list-wasm-hashes": "tsx scripts/list-wasm-hashes.ts",
     "test:scripts": "tsx --test --test-force-exit scripts/__tests__/*.test.ts",
+    "check:toolchain": "tsx scripts/check-toolchain-alignment.ts",
     "changelog": "conventional-changelog -p angular -i CHANGELOG.md -s",
     "generate:types": "openapi-typescript docs/security/openapi.yaml -o packages/api-types/index.ts",
     "watch:contracts": "cd contracts/tariff-shield && cargo watch -x test -w src/",
