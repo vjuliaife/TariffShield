@@ -108,6 +108,7 @@ The watch command uses `-w src/` to watch crate source files only, avoiding buil
 | API integration tests | `npm run test:integration --workspace=apps/api` |
 | SDK tests | `npm run test --workspace=packages/sdk` (runs `src/compatibility.test.ts` via `tsx --test`) |
 | Happy-path e2e smoke | `npm run e2e` — start the API first (`npm run dev:api`), then run from the repo root. Exits non-zero on any step failure. |
+| Web unit tests | `npm test --workspace=apps/web` (Vitest; `test:watch` and `test:coverage` also available) |
 | End-to-end tests | `npx playwright test` (from `apps/web`; see `apps/web/package.json` `test:e2e`) |
 
 CI runs the contract, typecheck, and lint suites on every PR — see `.github/workflows/ci.yml` and `.github/workflows/contract.yml`.
