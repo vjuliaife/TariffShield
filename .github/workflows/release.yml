@@ -14,6 +14,9 @@ permissions:
 jobs:
   release:
     name: release
+    concurrency:
+      group: release-${{ github.ref }}
+      cancel-in-progress: false # Queue semantic-release to prevent duplicate git tags/releases
     runs-on: ubuntu-latest
     timeout-minutes: 10
     if: github.event.workflow_run.conclusion == 'success'
