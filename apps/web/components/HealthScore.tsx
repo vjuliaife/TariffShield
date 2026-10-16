@@ -7,7 +7,44 @@ type HealthGrade = {
   gradeColor: string;
 };
 
-function getHealthGrade(healthScore: number): HealthGrade {
+export type HealthScoreBreakdown = {
+  /** Collateral / Required as a whole percentage. 100 when required is 0n. */
+  coverageRatio: number;
+  /** Reserve / Collateral as a whole percentage. 0 when collateral is 0n. */
+  reserveRatio: number;
+  /** coverageRatio capped at 100. Weighted 70% in healthScore. */
+  coverageScore: number;
+  /** reserveRatio clamped to [0, 100]. Weighted 30% in healthScore. */
+  reserveScore: number;
+  /** Math.round(coverageScore * 0.7 + reserveScore * 0.3), 0-100. */
+  healthScore: number;
+};
+
+/**
+ * Pure health score calculation used by <HealthScore />.
+ *
+ * Zero denominators are special-cased so the score never becomes NaN/Infinity
+ * and BigInt division never throws:
+ * - required === 0n  -> coverageRatio is 100 (nothing required means fully covered)
+ * - collateral === 0n -> reserveRatio is 0, even if reserve is nonzero
+ */
+export function computeHealthScore(
+  collateral: bigint,
+  required: bigint,
+  reserve: bigint,
+): HealthScoreBreakdown {
+  const coverageRatio = required === 0n ? 100 : Number((collateral * 100n) / required);
+  const reserveRatio = collateral === 0n ? 0 : Number((reserve * 100n) / collateral);
+
+  const coverageScore = Math.min(100, coverageRatio);
+  const reserveScore = Math.min(100, Math.max(0, reserveRatio));
+
+  const healthScore = Math.round(coverageScore * 0.7 + reserveScore * 0.3);
+
+  return { coverageRatio, reserveRatio, coverageScore, reserveScore, healthScore };
+}
+
+export function getHealthGrade(healthScore: number): HealthGrade {
   if (healthScore >= 80) {
     return { grade: 'excellent', gradeColor: 'text-success bg-success/10' };
   }
@@ -44,13 +81,8 @@ export function HealthScore({
   const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const coverageRatio = required === 0n ? 100 : Number((collateral * 100n) / required);
-  const reserveRatio = collateral === 0n ? 0 : Number((reserve * 100n) / collateral);
-
-  const coverageScore = Math.min(100, coverageRatio);
-  const reserveScore = Math.min(100, Math.max(0, reserveRatio));
-
-  const healthScore = Math.round(coverageScore * 0.7 + reserveScore * 0.3);
+  const { coverageRatio, reserveRatio, coverageScore, reserveScore, healthScore } =
+    computeHealthScore(collateral, required, reserve);
 
   const { grade } = getHealthGrade(healthScore);
   const [displayedScore, setDisplayedScore] = useState(healthScore);

@@ -113,6 +113,12 @@ CREATE TABLE importer_health_thresholds (
 * Surfaces an interactive "Configure Alert Thresholds" gear button next to the Health Score breakdown.
 * Displays a slider control allowing importers to tune Warning and Critical bounds with real-time feedback.
 * Visual indicators on the progress bar reflect custom threshold markers.
+* The score math lives in the exported pure helper `computeHealthScore(collateral, required, reserve)`; the grade mapping lives in `getHealthGrade(score)`.
+* Zero denominators are special-cased so the UI never shows `NaN%` or throws on BigInt division:
+  * `required === 0n` -> coverage ratio is 100%, so coverage contributes the full 70 points (also when collateral is `0n`).
+  * `collateral === 0n` -> reserve ratio is 0%, so reserve contributes 0 points even if reserve is nonzero.
+* Grade bands (inclusive): Excellent 80-100 (`text-success`), Good 60-79 (`text-accent bg-accent/10`), Fair 40-59 (`text-yellow-500 bg-yellow-500/10`), Poor 0-39 (`text-danger bg-danger/10`). The progress bar colour follows the alert thresholds, not the grade.
+* Unit tests: `apps/web/components/HealthScore.test.tsx` (run from `apps/web` with `npx tsx --test components/HealthScore.test.tsx`).
 
 ### Algorithmic Complexity Analysis
 * **Time Complexity**:
