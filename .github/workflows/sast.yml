@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       
       # Migrated from deprecated returntocorp/semgrep-action@v1 to maintained semgrep/semgrep-action SHA pin (v1)
       - name: Semgrep Scan
