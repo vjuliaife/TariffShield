@@ -9,7 +9,7 @@ license = "MIT"
 authors = ["TariffShield contributors"]
 
 [workspace.dependencies]
-soroban-sdk = "22.0.0"
+soroban-sdk = "27.0.6"
 # Developer tooling: cargo-watch v8.5.2 (install via `cargo install cargo-watch --version 8.5.2`)
 
 [profile.release]
