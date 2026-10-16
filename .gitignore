@@ -19,6 +19,9 @@ deployments.json
 .vscode
 .idea
 
+# Test coverage output (apps/web Vitest, #649)
+coverage/
+
 # Test snapshots
 __snapshots__/
 *.snap
