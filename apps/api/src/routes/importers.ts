@@ -9,6 +9,7 @@ import {
   refreshImporterMetricsView,
   getImporterReview,
   createNotification,
+  listSuretyAdminImporters,
 } from '../db.js';
 import { adminRouter } from './admin.js';
 import {
@@ -209,25 +210,54 @@ importersRouter.post('/', async (req: Request, res: Response) => {
   });
 });
 
+// #250: surety_admin's list is paginated (?page=&limit=, max 100, default
+// 50) and resolves bond/metrics data inline via a single JOIN query — see
+// listSuretyAdminImporters in db.ts. The non-admin branch (an importer
+// listing their own single record) is unpaginated by design: it returns at
+// most one row.
+const ListImportersQuerySchema = z.object({
+  page: z.coerce.number().int().positive().default(1),
+  limit: z.coerce.number().int().positive().max(100).default(50),
+});
+
 importersRouter.get('/', async (req: Request, res: Response) => {
   const user = (req as AuthedRequest).user;
-  let r;
   if (user.role === 'surety_admin') {
-    r = await pool.query(
-      `SELECT i.id, i.legal_name, i.bond_id, i.stellar_address, i.created_at, u.email
-         FROM importers i JOIN users u ON u.id = i.user_id
-         ORDER BY i.created_at DESC`
-    );
-  } else {
-    r = await pool.query(
-      `SELECT DISTINCT i.id, i.legal_name, i.bond_id, i.stellar_address, i.created_at
-         FROM importers i
-         LEFT JOIN importer_team_members tm ON tm.importer_id = i.id AND tm.user_id = $1 AND tm.status = 'active'
-         WHERE i.user_id = $1 OR tm.user_id IS NOT NULL
-         ORDER BY i.created_at DESC`,
-      [user.id]
-    );
+    const parse = ListImportersQuerySchema.safeParse(req.query);
+    if (!parse.success) {
+      res.status(400).json({ error: 'invalid query parameters', details: parse.error.issues });
+      return;
+    }
+    const { page, limit } = parse.data;
+    const { importers, total } = await listSuretyAdminImporters(page, limit);
+    res.json({
+      importers: importers.map((imp) => ({
+        id: imp.id,
+        legalName: imp.legalName,
+        bondId: imp.bondId,
+        stellarAddress: imp.stellarAddress,
+        createdAt: imp.createdAt,
+        email: imp.email,
+        bondAmount: imp.bondAmount,
+        cbpMinimumRequired: imp.cbpMinimumRequired,
+        currentBalance: imp.currentBalance,
+        coverageRatio: imp.coverageRatio,
+      })),
+      total,
+      page,
+      limit,
+    });
+    return;
   }
+
+  const r = await pool.query(
+    `SELECT DISTINCT i.id, i.legal_name, i.bond_id, i.stellar_address, i.created_at
+       FROM importers i
+       LEFT JOIN importer_team_members tm ON tm.importer_id = i.id AND tm.user_id = $1 AND tm.status = 'active'
+       WHERE i.user_id = $1 OR tm.user_id IS NOT NULL
+       ORDER BY i.created_at DESC`,
+    [user.id]
+  );
   res.json({ importers: r.rows });
 });
 
