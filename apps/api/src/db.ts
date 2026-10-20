@@ -1028,6 +1028,94 @@ export async function getImporterMetrics(): Promise<ImporterMetrics> {
   };
 }
 
+export interface SuretyAdminImporterRow {
+  id: string;
+  legalName: string;
+  bondId: string;
+  stellarAddress: string;
+  createdAt: string;
+  email: string;
+  bondAmount: string | null;
+  cbpMinimumRequired: string | null;
+  currentBalance: string | null;
+  coverageRatio: string | null;
+}
+
+export interface SuretyAdminImporterPage {
+  importers: SuretyAdminImporterRow[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
+/**
+ * #250: surety_admin importer list, paginated and with bond/metrics data
+ * inlined via LEFT JOIN — one query total (plus one count query for
+ * pagination) regardless of portfolio size, instead of a separate lookup
+ * per importer. bond_records picks the importer's most recent bond row
+ * (an importer can have more than one across renewals); importer_metrics
+ * is the pre-aggregated MV from migration 004 (see its definition above).
+ */
+export async function listSuretyAdminImporters(
+  page: number,
+  limit: number
+): Promise<SuretyAdminImporterPage> {
+  const offset = (page - 1) * limit;
+
+  const countResult = await timedQuery<{ count: string }>(
+    'SELECT COUNT(*) FROM importers',
+    undefined,
+    'count_surety_admin_importers'
+  );
+  const total = Number(countResult.rows[0]!.count);
+
+  const result = await timedQuery<{
+    id: string;
+    legal_name: string;
+    bond_id: string;
+    stellar_address: string;
+    created_at: Date;
+    email: string;
+    bond_amount: string | null;
+    cbp_minimum_required: string | null;
+    current_balance: string | null;
+    coverage_ratio: string | null;
+  }>(
+    `SELECT i.id, i.legal_name, i.bond_id, i.stellar_address, i.created_at, u.email,
+            b.bond_amount, b.cbp_minimum_required,
+            m.current_balance, m.coverage_ratio
+       FROM importers i
+       JOIN users u ON u.id = i.user_id
+       LEFT JOIN LATERAL (
+         SELECT bond_amount, cbp_minimum_required
+         FROM bond_records
+         WHERE importer_id = i.id
+         ORDER BY created_at DESC
+         LIMIT 1
+       ) b ON true
+       LEFT JOIN importer_metrics m ON m.importer_id = i.id
+       ORDER BY i.created_at DESC
+       LIMIT $1 OFFSET $2`,
+    [limit, offset],
+    'select_surety_admin_importers_page'
+  );
+
+  const importers: SuretyAdminImporterRow[] = result.rows.map((row) => ({
+    id: row.id,
+    legalName: row.legal_name,
+    bondId: row.bond_id,
+    stellarAddress: row.stellar_address,
+    createdAt: row.created_at.toISOString(),
+    email: row.email,
+    bondAmount: row.bond_amount,
+    cbpMinimumRequired: row.cbp_minimum_required,
+    currentBalance: row.current_balance,
+    coverageRatio: row.coverage_ratio,
+  }));
+
+  return { importers, total, page, limit };
+}
+
 /**
  * Refresh importer_metrics_mv without blocking concurrent reads.
  * Requires the unique index created alongside the view (see migrate()).

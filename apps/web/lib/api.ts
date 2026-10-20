@@ -26,6 +26,10 @@ export interface Importer {
   stellarTxUrl?: string;
   createdAt: string;
   email?: string;
+  bondAmount?: string | null;
+  cbpMinimumRequired?: string | null;
+  currentBalance?: string | null;
+  coverageRatio?: string | null;
 }
 
 export interface OnChainAccount {
@@ -156,7 +160,13 @@ export const api = {
     bondId: number;
     initialRequiredCollateral: string;
   }) => request<{ importer: Importer }>('/importers', { method: 'POST', body: b }),
-  listImporters: () => request<{ importers: Importer[] }>('/importers'),
+  // #250: surety_admin's list is paginated server-side (default 50/page,
+  // max 100). Non-admin callers (importers listing their own record) ignore
+  // page/limit since that branch always returns at most one row.
+  listImporters: (page = 1, limit = 50) =>
+    request<{ importers: Importer[]; total?: number; page?: number; limit?: number }>(
+      `/importers?${new URLSearchParams({ page: String(page), limit: String(limit) })}`
+    ),
   getStats: () => request<{ metrics: ImporterMetrics }>('/importers/stats'),
   // #255: cursor-paginated event log — fetched lazily by the dashboard's
   // infinite-scroll section instead of being inlined into getImporter().
