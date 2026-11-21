@@ -1,1 +1,214 @@
-LyoqCiAqIEludGVncmF0aW9uIGNvdmVyYWdlIGZvciB0aGUgc3VyZXR5LWxpY2Vuc2UgYW5kIHJlZ3VsYXRvcnktcmVwb3J0IHJvdXRlcy4KICoKICogUnVuIHdpdGggYSBtaWdyYXRlZCBQb3N0Z3JlU1FMIHRlc3QgZGF0YWJhc2UgdmlhOgogKiAgIG5wbSBydW4gdGVzdDppbnRlZ3JhdGlvbiAtLXdvcmtzcGFjZT1hcHBzL2FwaQogKi8KCmltcG9ydCB7IGFmdGVyLCBiZWZvcmUsIGRlc2NyaWJlLCBpdCB9IGZyb20gJ25vZGU6dGVzdCc7CmltcG9ydCBhc3NlcnQgZnJvbSAnbm9kZTphc3NlcnQvc3RyaWN0JzsKaW1wb3J0IHsgcmFuZG9tVVVJRCB9IGZyb20gJ25vZGU6Y3J5cHRvJzsKaW1wb3J0IHsgUG9vbCB9IGZyb20gJ3BnJzsKCmNvbnN0IERBVEFCQVNFX1VSTCA9CiAgcHJvY2Vzcy5lbnYuREFUQUJBU0VfVVJMID8/ICdwb3N0Z3JlczovL3Rlc3Q6dGVzdEBsb2NhbGhvc3Q6NTQzMi90YXJpZmZzaGllbGRfdGVzdCc7CmNvbnN0IHBvb2wgPSBuZXcgUG9vbCh7IGNvbm5lY3Rpb25TdHJpbmc6IERBVEFCQVNFX1VSTCB9KTsKY29uc3QgdGFnID0gcmFuZG9tVVVJRCgpLnNsaWNlKDAsIDgpOwoKdHlwZSBDYXB0dXJlZFJlc3BvbnNlID0gewogIHN0YXR1c0NvZGU6IG51bWJlcjsKICBib2R5OiB1bmtub3duOwogIGhlYWRlcnM6IFJlY29yZDxzdHJpbmcsIHN0cmluZz47Cn07CgpmdW5jdGlvbiByZXNwb25zZSgpOiB7IHJlczogYW55OyBjYXB0dXJlZDogQ2FwdHVyZWRSZXNwb25zZSB9IHsKICBjb25zdCBjYXB0dXJlZDogQ2FwdHVyZWRSZXNwb25zZSA9IHsgc3RhdHVzQ29kZTogMjAwLCBib2R5OiB1bmRlZmluZWQsIGhlYWRlcnM6IHt9IH07CiAgY29uc3QgcmVzID0gewogICAgc3RhdHVzKGNvZGU6IG51bWJlcikgewogICAgICBjYXB0dXJlZC5zdGF0dXNDb2RlID0gY29kZTsKICAgICAgcmV0dXJuIHRoaXM7CiAgICB9LAogICAgc2V0SGVhZGVyKG5hbWU6IHN0cmluZywgdmFsdWU6IHN0cmluZykgewogICAgICBjYXB0dXJlZC5oZWFkZXJzW25hbWUudG9Mb3dlckNhc2UoKV0gPSB2YWx1ZTsKICAgICAgcmV0dXJuIHRoaXM7CiAgICB9LAogICAganNvbihib2R5OiB1bmtub3duKSB7CiAgICAgIGNhcHR1cmVkLmJvZHkgPSBib2R5OwogICAgICByZXR1cm4gdGhpczsKICAgIH0sCiAgICBzZW5kKGJvZHk6IHVua25vd24pIHsKICAgICAgY2FwdHVyZWQuYm9keSA9IGJvZHk7CiAgICAgIHJldHVybiB0aGlzOwogICAgfSwKICB9OwogIHJldHVybiB7IHJlcywgY2FwdHVyZWQgfTsKfQoKZnVuY3Rpb24gcm91dGVIYW5kbGVyKHJvdXRlcjogYW55LCBwYXRoOiBzdHJpbmcsIG1ldGhvZDogc3RyaW5nLCBzdGFja0luZGV4ID0gMCkgewogIGNvbnN0IGxheWVyID0gKHJvdXRlci5zdGFjayBhcyBhbnlbXSkuZmluZCgKICAgIChlbnRyeSkgPT4gZW50cnkucm91dGU/LnBhdGggPT09IHBhdGggJiYgZW50cnkucm91dGUubWV0aG9kc1ttZXRob2RdCiAgKTsKICBhc3NlcnQub2sobGF5ZXIsIGAke21ldGhvZC50b1VwcGVyQ2FzZSgpfSAke3BhdGh9IHJvdXRlIG11c3QgYmUgcmVnaXN0ZXJlZGApOwogIGNvbnN0IGhhbmRsZXJJbmRleCA9IHN0YWNrSW5kZXggPCAwID8gbGF5ZXIucm91dGUuc3RhY2subGVuZ3RoICsgc3RhY2tJbmRleCA6IHN0YWNrSW5kZXg7CiAgcmV0dXJuIGxheWVyLnJvdXRlLnN0YWNrW2hhbmRsZXJJbmRleF0uaGFuZGxlOwp9Cgphc3luYyBmdW5jdGlvbiBjcmVhdGVVc2VyKHJvbGU6IHN0cmluZywgc3VmZml4OiBzdHJpbmcpIHsKICBjb25zdCByZXN1bHQgPSBhd2FpdCBwb29sLnF1ZXJ5PHsgaWQ6IHN0cmluZyB9PigKICAgIGBJTlNFUlQgSU5UTyB1c2VycyAoZW1haWwsIHBhc3N3b3JkX2hhc2gsIHJvbGUpCiAgICAgVkFMVUVTICgkMSwgJDIsICQzKSBSRVRVUk5JTkcgaWRgLAogICAgW2BpbnRlZ3JhdGlvbi0ke3N1ZmZpeH0tJHt0YWd9QGV4YW1wbGUuY29tYCwgJ2ludGVncmF0aW9uLXRlc3QtaGFzaCcsIHJvbGVdCiAgKTsKICByZXR1cm4gcmVzdWx0LnJvd3NbMF0hLmlkOwp9CgpkZXNjcmliZSgnc3VyZXR5LWxpY2Vuc2UgYW5kIHJlZ3VsYXRvcnkgcm91dGUgcmVncmVzc2lvbnMnLCAoKSA9PiB7CiAgbGV0IHN1cmV0eUlkOiBzdHJpbmc7CiAgbGV0IGltcG9ydGVySWQ6IHN0cmluZzsKICBsZXQgdmVyaWZpY2F0aW9uSWQ6IHN0cmluZzsKCiAgYmVmb3JlKGFzeW5jICgpID0+IHsKICAgIHN1cmV0eUlkID0gYXdhaXQgY3JlYXRlVXNlcignc3VyZXR5X2FkbWluJywgJ3N1cmV0eScpOwogICAgaW1wb3J0ZXJJZCA9IGF3YWl0IGNyZWF0ZVVzZXIoJ2ltcG9ydGVyJywgJ2ltcG9ydGVyJyk7CgogICAgY29uc3QgdmVyaWZpY2F0aW9uID0gYXdhaXQgcG9vbC5xdWVyeTx7IGlkOiBzdHJpbmcgfT4oCiAgICAgIGBJTlNFUlQgSU5UTyBzdXJldHlfbGljZW5zZV92ZXJpZmljYXRpb25zICh1c2VyX2lkLCBzdGF0dXMpCiAgICAgICBWQUxVRVMgKCQxLCAnc3VibWl0dGVkJykgUkVUVVJOSU5HIGlkYCwKICAgICAgW3N1cmV0eUlkXQogICAgKTsKICAgIHZlcmlmaWNhdGlvbklkID0gdmVyaWZpY2F0aW9uLnJvd3NbMF0hLmlkOwoKICAgIGF3YWl0IHBvb2wucXVlcnkoCiAgICAgIGBJTlNFUlQgSU5UTyBzdXJldHlfc3RhdGVfbGljZW5zZXMgKHN1cmV0eV9pZCwgc3RhdGVfY29kZSwgbGljZW5zZV9udW1iZXIpCiAgICAgICBWQUxVRVMgKCQxLCAkMiwgJDMpYCwKICAgICAgW3N1cmV0eUlkLCBgVCR7dGFnLnNsaWNlKDAsIDEpLnRvVXBwZXJDYXNlKCl9YCwgYExJQy0ke3RhZ31gXQogICAgKTsKICB9KTsKCiAgYWZ0ZXIoYXN5bmMgKCkgPT4gewogICAgYXdhaXQgcG9vbC5xdWVyeSgnREVMRVRFIEZST00gcmVndWxhdG9yeV9yZXBvcnRfYXVkaXRfbG9ncyBXSEVSRSBzdXJldHlfaWQgPSAkMScsIFtzdXJldHlJZF0pOwogICAgYXdhaXQgcG9vbC5xdWVyeSgnREVMRVRFIEZST00gc3VyZXR5X3N0YXRlX2xpY2Vuc2VzIFdIRVJFIHN1cmV0eV9pZCA9ICQxJywgW3N1cmV0eUlkXSk7CiAgICBhd2FpdCBwb29sLnF1ZXJ5KCdERUxFVEUgRlJPTSBzdXJldHlfbGljZW5zZV92ZXJpZmljYXRpb25zIFdIRVJFIHVzZXJfaWQgPSAkMScsIFtzdXJldHlJZF0pOwogICAgYXdhaXQgcG9vbC5xdWVyeSgnREVMRVRFIEZST00gdXNlcnMgV0hFUkUgaWQgSU4gKCQxLCAkMiknLCBbc3VyZXR5SWQsIGltcG9ydGVySWRdKTsKICAgIGF3YWl0IHBvb2wuZW5kKCk7CiAgfSk7CgogIGl0KCcjNjQxIGRvY3VtZW50cyB0aGF0IGFuIGF1dGhlbnRpY2F0ZWQgaW1wb3J0ZXIgY2FuIHJldmlldyBhIGxpY2Vuc2UgdW50aWwgcGxhdGZvcm1fYWRtaW4gbGFuZHMnLCBhc3luYyAoKSA9PiB7CiAgICBjb25zdCB7IHN1cmV0eUxpY2Vuc2VSb3V0ZXIgfSA9IGF3YWl0IGltcG9ydCgnLi4vLi4vcm91dGVzL3N1cmV0eS1saWNlbnNlLmpzJyk7CiAgICBjb25zdCByZXZpZXcgPSByb3V0ZUhhbmRsZXIoc3VyZXR5TGljZW5zZVJvdXRlciwgJy86aWQvcmV2aWV3JywgJ3B1dCcpOwogICAgY29uc3QgeyByZXMsIGNhcHR1cmVkIH0gPSByZXNwb25zZSgpOwoKICAgIGF3YWl0IHJldmlldygKICAgICAgewogICAgICAgIHBhcmFtczogeyBpZDogdmVyaWZpY2F0aW9uSWQgfSwKICAgICAgICBib2R5OiB7IGFjdGlvbjogJ2FwcHJvdmUnIH0sCiAgICAgICAgdXNlcjogeyBpZDogaW1wb3J0ZXJJZCwgcm9sZTogJ2ltcG9ydGVyJyB9LAogICAgICB9LAogICAgICByZXMsCiAgICAgICgpID0+IHVuZGVmaW5lZAogICAgKTsKCiAgICBhc3NlcnQuZXF1YWwoY2FwdHVyZWQuc3RhdHVzQ29kZSwgMjAwKTsKICAgIGFzc2VydC5kZWVwRXF1YWwoY2FwdHVyZWQuYm9keSwgeyBpZDogdmVyaWZpY2F0aW9uSWQsIHN0YXR1czogJ3ZlcmlmaWVkJyB9KTsKCiAgICBjb25zdCByZWplY3RlZCA9IGF3YWl0IHBvb2wucXVlcnkoCiAgICAgIGBVUERBVEUgc3VyZXR5X2xpY2Vuc2VfdmVyaWZpY2F0aW9ucyBTRVQgc3RhdHVzID0gJ3N1Ym1pdHRlZCcgV0hFUkUgaWQgPSAkMSBSRVRVUk5JTkcgaWRgLAogICAgICBbdmVyaWZpY2F0aW9uSWRdCiAgICApOwogICAgYXNzZXJ0LmVxdWFsKHJlamVjdGVkLnJvd0NvdW50LCAxKTsKCiAgICBjb25zdCBzZWNvbmQgPSByZXNwb25zZSgpOwogICAgYXdhaXQgcmV2aWV3KAogICAgICB7CiAgICAgICAgcGFyYW1zOiB7IGlkOiB2ZXJpZmljYXRpb25JZCB9LAogICAgICAgIGJvZHk6IHsgYWN0aW9uOiAncmVqZWN0JywgcmVqZWN0aW9uUmVhc29uOiAnaW50ZWdyYXRpb24gcmVqZWN0aW9uJyB9LAogICAgICAgIHVzZXI6IHsgaWQ6IGltcG9ydGVySWQsIHJvbGU6ICdpbXBvcnRlcicgfSwKICAgICAgfSwKICAgICAgc2Vjb25kLnJlcywKICAgICAgKCkgPT4gdW5kZWZpbmVkCiAgICApOwogICAgYXNzZXJ0LmVxdWFsKHNlY29uZC5jYXB0dXJlZC5zdGF0dXNDb2RlLCAyMDApOwogICAgY29uc3Qgcm93ID0gYXdhaXQgcG9vbC5xdWVyeSgKICAgICAgJ1NFTEVDVCBzdGF0dXMsIHJlamVjdGlvbl9yZWFzb24gRlJPTSBzdXJldHlfbGljZW5zZV92ZXJpZmljYXRpb25zIFdIRVJFIGlkID0gJDEnLAogICAgICBbdmVyaWZpY2F0aW9uSWRdCiAgICApOwogICAgYXNzZXJ0LmRlZXBFcXVhbChyb3cucm93c1swXSwgeyBzdGF0dXM6ICdyZWplY3RlZCcsIHJlamVjdGlvbl9yZWFzb246ICdpbnRlZ3JhdGlvbiByZWplY3Rpb24nIH0pOwoKICAgIGNvbnN0IG1pc3NpbmcgPSByZXNwb25zZSgpOwogICAgYXdhaXQgcmV2aWV3KAogICAgICB7CiAgICAgICAgcGFyYW1zOiB7IGlkOiByYW5kb21VVUlEKCkgfSwKICAgICAgICBib2R5OiB7IGFjdGlvbjogJ2FwcHJvdmUnIH0sCiAgICAgICAgdXNlcjogeyBpZDogaW1wb3J0ZXJJZCwgcm9sZTogJ2ltcG9ydGVyJyB9LAogICAgICB9LAogICAgICBtaXNzaW5nLnJlcywKICAgICAgKCkgPT4gdW5kZWZpbmVkCiAgICApOwogICAgYXNzZXJ0LmVxdWFsKG1pc3NpbmcuY2FwdHVyZWQuc3RhdHVzQ29kZSwgNDA0KTsKICB9KTsKCiAgaXQoJyM2NDAgcmV0dXJucyA0MDQgYW5kIGRvZXMgbm90IGNyZWF0ZSBhIHZlcmlmaWNhdGlvbiByb3cgd2hlbiBzdWJtaXQgaGFzIG5vIHJlY29yZCcsIGFzeW5jICgpID0+IHsKICAgIGNvbnN0IHVzZXJJZCA9IGF3YWl0IGNyZWF0ZVVzZXIoJ3N1cmV0eV9hZG1pbicsICduby12ZXJpZmljYXRpb24nKTsKICAgIHRyeSB7CiAgICAgIGNvbnN0IHsgc3VyZXR5TGljZW5zZVJvdXRlciB9ID0gYXdhaXQgaW1wb3J0KCcuLi8uLi9yb3V0ZXMvc3VyZXR5LWxpY2Vuc2UuanMnKTsKICAgICAgY29uc3Qgc3VibWl0ID0gcm91dGVIYW5kbGVyKHN1cmV0eUxpY2Vuc2VSb3V0ZXIsICcvc3VibWl0JywgJ3Bvc3QnLCAtMSk7CiAgICAgIGNvbnN0IHsgcmVzLCBjYXB0dXJlZCB9ID0gcmVzcG9uc2UoKTsKCiAgICAgIGF3YWl0IHN1Ym1pdCgKICAgICAgICB7CiAgICAgICAgICBib2R5OiB7IG5haWNOdW1iZXI6ICcxMjM0NScsIGNvbXBhbnlOYW1lOiAnTm8gUmVjb3JkIENvJywgc3RhdGVPZkRvbWljaWxlOiAnQ0EnIH0sCiAgICAgICAgICB1c2VyOiB7IGlkOiB1c2VySWQsIHJvbGU6ICdzdXJldHlfYWRtaW4nIH0sCiAgICAgICAgfSwKICAgICAgICByZXMsCiAgICAgICAgKCkgPT4gdW5kZWZpbmVkCiAgICAgICk7CgogICAgICBhc3NlcnQuZXF1YWwoY2FwdHVyZWQuc3RhdHVzQ29kZSwgNDA0KTsKICAgICAgY29uc3Qgcm93cyA9IGF3YWl0IHBvb2wucXVlcnkoCiAgICAgICAgJ1NFTEVDVCBpZCBGUk9NIHN1cmV0eV9saWNlbnNlX3ZlcmlmaWNhdGlvbnMgV0hFUkUgdXNlcl9pZCA9ICQxJywKICAgICAgICBbdXNlcklkXQogICAgICApOwogICAgICBhc3NlcnQuZXF1YWwocm93cy5yb3dDb3VudCwgMCk7CiAgICB9IGZpbmFsbHkgewogICAgICBhd2FpdCBwb29sLnF1ZXJ5KCdERUxFVEUgRlJPTSB1c2VycyBXSEVSRSBpZCA9ICQxJywgW3VzZXJJZF0pOwogICAgfQogIH0pOwoKICBpdCgnIzYzNiBhbmQgIzYzNyBjYWNoZSBKU09OL0NTViByZXBvcnRzIGFuZCBhdWRpdCBvbmx5IGNhY2hlIG1pc3NlcycsIGFzeW5jICgpID0+IHsKICAgIGNvbnN0IHsgcmVndWxhdG9yeVJvdXRlciB9ID0gYXdhaXQgaW1wb3J0KCcuLi8uLi9yb3V0ZXMvcmVndWxhdG9yeS5qcycpOwogICAgY29uc3QgaGFuZGxlciA9IHJvdXRlSGFuZGxlcihyZWd1bGF0b3J5Um91dGVyLCAnL3N0YXRlLXJlcG9ydC86c3RhdGVfY29kZScsICdnZXQnKTsKICAgIGNvbnN0IHN0YXRlQ29kZSA9IGBUJHt0YWcuc2xpY2UoMCwgMSkudG9VcHBlckNhc2UoKX1gOwogICAgY29uc3QgcXVlcnkgPSB7IHN0YXJ0X2RhdGU6ICcyMDI2LTAxLTAxJywgZW5kX2RhdGU6ICcyMDI2LTAxLTMxJyB9OwoKICAgIGNvbnN0IGpzb25GaXJzdCA9IHJlc3BvbnNlKCk7CiAgICBhd2FpdCBoYW5kbGVyKHsgcGFyYW1zOiB7IHN0YXRlX2NvZGU6IHN0YXRlQ29kZSB9LCBxdWVyeTogeyAuLi5xdWVyeSwgZm9ybWF0OiAnanNvbicgfSwgdXNlcjogeyBpZDogc3VyZXR5SWQsIHJvbGU6ICdzdXJldHlfYWRtaW4nLCBlbWFpbDogJ3Rlc3RAZXhhbXBsZS5jb20nIH0gfSwganNvbkZpcnN0LnJlcyk7CiAgICBhc3NlcnQuZXF1YWwoanNvbkZpcnN0LmNhcHR1cmVkLnN0YXR1c0NvZGUsIDIwMCk7CiAgICBhc3NlcnQuZXF1YWwoanNvbkZpcnN0LmNhcHR1cmVkLmhlYWRlcnNbJ3gtY2FjaGUnXSwgJ01JU1MnKTsKICAgIGNvbnN0IGpzb25TZWNvbmQgPSByZXNwb25zZSgpOwogICAgYXdhaXQgaGFuZGxlcih7IHBhcmFtczogeyBzdGF0ZV9jb2RlOiBzdGF0ZUNvZGUgfSwgcXVlcnk6IHsgLi4ucXVlcnksIGZvcm1hdDogJ2pzb24nIH0sIHVzZXI6IHsgaWQ6IHN1cmV0eUlkLCByb2xlOiAnc3VyZXR5X2FkbWluJywgZW1haWw6ICd0ZXN0QGV4YW1wbGUuY29tJyB9IH0sIGpzb25TZWNvbmQucmVzKTsKICAgIGFzc2VydC5lcXVhbChqc29uU2Vjb25kLmNhcHR1cmVkLmhlYWRlcnNbJ3gtY2FjaGUnXSwgJ0hJVCcpOwogICAgYXNzZXJ0LmRlZXBFcXVhbChqc29uU2Vjb25kLmNhcHR1cmVkLmJvZHksIGpzb25GaXJzdC5jYXB0dXJlZC5ib2R5KTsKCiAgICBjb25zdCBjc3ZGaXJzdCA9IHJlc3BvbnNlKCk7CiAgICBhd2FpdCBoYW5kbGVyKHsgcGFyYW1zOiB7IHN0YXRlX2NvZGU6IHN0YXRlQ29kZSB9LCBxdWVyeTogeyAuLi5xdWVyeSwgZm9ybWF0OiAnY3N2JyB9LCB1c2VyOiB7IGlkOiBzdXJldHlJZCwgcm9sZTogJ3N1cmV0eV9hZG1pbicsIGVtYWlsOiAndGVzdEBleGFtcGxlLmNvbScgfSB9LCBjc3ZGaXJzdC5yZXMpOwogICAgYXNzZXJ0LmVxdWFsKGNzdkZpcnN0LmNhcHR1cmVkLmhlYWRlcnNbJ3gtY2FjaGUnXSwgJ01JU1MnKTsKICAgIGFzc2VydC5tYXRjaChjc3ZGaXJzdC5jYXB0dXJlZC5oZWFkZXJzWydjb250ZW50LXR5cGUnXSwgL150ZXh0XC9jc3YvKTsKICAgIGFzc2VydC5tYXRjaChjc3ZGaXJzdC5jYXB0dXJlZC5oZWFkZXJzWydjb250ZW50LWRpc3Bvc2l0aW9uJ10sIC9maWxlbmFtZT0icmVndWxhdG9yeV9yZXBvcnRfLyk7CiAgICBjb25zdCBjc3ZTZWNvbmQgPSByZXNwb25zZSgpOwogICAgYXdhaXQgaGFuZGxlcih7IHBhcmFtczogeyBzdGF0ZV9jb2RlOiBzdGF0ZUNvZGUgfSwgcXVlcnk6IHsgLi4ucXVlcnksIGZvcm1hdDogJ2NzdicgfSwgdXNlcjogeyBpZDogc3VyZXR5SWQsIHJvbGU6ICdzdXJldHlfYWRtaW4nLCBlbWFpbDogJ3Rlc3RAZXhhbXBsZS5jb20nIH0gfSwgY3N2U2Vjb25kLnJlcyk7CiAgICBhc3NlcnQuZXF1YWwoY3N2U2Vjb25kLmNhcHR1cmVkLmhlYWRlcnNbJ3gtY2FjaGUnXSwgJ0hJVCcpOwogICAgYXNzZXJ0LmVxdWFsKGNzdlNlY29uZC5jYXB0dXJlZC5ib2R5LCBjc3ZGaXJzdC5jYXB0dXJlZC5ib2R5KTsKCiAgICBjb25zdCBhdWRpdHMgPSBhd2FpdCBwb29sLnF1ZXJ5KAogICAgICBgU0VMRUNUIHN1cmV0eV9pZCwgc3RhdGVfY29kZSwgc3RhcnRfZGF0ZTo6dGV4dCwgZW5kX2RhdGU6OnRleHQsIG91dHB1dF9mb3JtYXQKICAgICAgICAgRlJPTSByZWd1bGF0b3J5X3JlcG9ydF9hdWRpdF9sb2dzCiAgICAgICAgV0hFUkUgc3VyZXR5X2lkID0gJDEgQU5EIHN0YXRlX2NvZGUgPSAkMgogICAgICAgIE9SREVSIEJZIG91dHB1dF9mb3JtYXRgLAogICAgICBbc3VyZXR5SWQsIHN0YXRlQ29kZV0KICAgICk7CiAgICBhc3NlcnQuZGVlcEVxdWFsKGF1ZGl0cy5yb3dzLCBbCiAgICAgIHsgc3VyZXR5X2lkOiBzdXJldHlJZCwgc3RhdGVfY29kZTogc3RhdGVDb2RlLCBzdGFydF9kYXRlOiAnMjAyNi0wMS0wMScsIGVuZF9kYXRlOiAnMjAyNi0wMS0zMScsIG91dHB1dF9mb3JtYXQ6ICdjc3YnIH0sCiAgICAgIHsgc3VyZXR5X2lkOiBzdXJldHlJZCwgc3RhdGVfY29kZTogc3RhdGVDb2RlLCBzdGFydF9kYXRlOiAnMjAyNi0wMS0wMScsIGVuZF9kYXRlOiAnMjAyNi0wMS0zMScsIG91dHB1dF9mb3JtYXQ6ICdqc29uJyB9LAogICAgXSk7CiAgfSk7Cn0pOwo=
+/**
+ * Integration coverage for the surety-license and regulatory-report routes.
+ *
+ * Run with a migrated PostgreSQL test database via:
+ *   npm run test:integration --workspace=apps/api
+ */
+
+import { after, before, describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { Pool } from 'pg';
+
+const DATABASE_URL =
+  process.env.DATABASE_URL ?? 'postgres://test:test@localhost:5432/tariffshield_test';
+const pool = new Pool({ connectionString: DATABASE_URL });
+const tag = randomUUID().slice(0, 8);
+
+type CapturedResponse = {
+  statusCode: number;
+  body: unknown;
+  headers: Record<string, string>;
+};
+
+function response(): { res: any; captured: CapturedResponse } {
+  const captured: CapturedResponse = { statusCode: 200, body: undefined, headers: {} };
+  const res = {
+    status(code: number) {
+      captured.statusCode = code;
+      return this;
+    },
+    setHeader(name: string, value: string) {
+      captured.headers[name.toLowerCase()] = value;
+      return this;
+    },
+    json(body: unknown) {
+      captured.body = body;
+      return this;
+    },
+    send(body: unknown) {
+      captured.body = body;
+      return this;
+    },
+  };
+  return { res, captured };
+}
+
+function routeHandler(router: any, path: string, method: string, stackIndex = 0) {
+  const layer = (router.stack as any[]).find(
+    (entry) => entry.route?.path === path && entry.route.methods[method]
+  );
+  assert.ok(layer, `${method.toUpperCase()} ${path} route must be registered`);
+  const handlerIndex = stackIndex < 0 ? layer.route.stack.length + stackIndex : stackIndex;
+  return layer.route.stack[handlerIndex].handle;
+}
+
+async function createUser(role: string, suffix: string) {
+  const result = await pool.query<{ id: string }>(
+    `INSERT INTO users (email, password_hash, role)
+     VALUES ($1, $2, $3) RETURNING id`,
+    [`integration-${suffix}-${tag}@example.com`, 'integration-test-hash', role]
+  );
+  return result.rows[0]!.id;
+}
+
+describe('surety-license and regulatory route regressions', () => {
+  let suretyId: string;
+  let importerId: string;
+  let verificationId: string;
+
+  before(async () => {
+    suretyId = await createUser('surety_admin', 'surety');
+    importerId = await createUser('importer', 'importer');
+
+    const verification = await pool.query<{ id: string }>(
+      `INSERT INTO surety_license_verifications (user_id, status)
+       VALUES ($1, 'submitted') RETURNING id`,
+      [suretyId]
+    );
+    verificationId = verification.rows[0]!.id;
+
+    await pool.query(
+      `INSERT INTO surety_state_licenses (surety_id, state_code, license_number)
+       VALUES ($1, $2, $3)`,
+      [suretyId, `T${tag.slice(0, 1).toUpperCase()}`, `LIC-${tag}`]
+    );
+  });
+
+  after(async () => {
+    await pool.query('DELETE FROM regulatory_report_audit_logs WHERE surety_id = $1', [suretyId]);
+    await pool.query('DELETE FROM surety_state_licenses WHERE surety_id = $1', [suretyId]);
+    await pool.query('DELETE FROM surety_license_verifications WHERE user_id = $1', [suretyId]);
+    await pool.query('DELETE FROM users WHERE id IN ($1, $2)', [suretyId, importerId]);
+    await pool.end();
+  });
+
+  it('#641 documents that an authenticated importer can review a license until platform_admin lands', async () => {
+    const { suretyLicenseRouter } = await import('../../routes/surety-license.js');
+    const review = routeHandler(suretyLicenseRouter, '/:id/review', 'put');
+    const { res, captured } = response();
+
+    await review(
+      {
+        params: { id: verificationId },
+        body: { action: 'approve' },
+        user: { id: importerId, role: 'importer' },
+      },
+      res,
+      () => undefined
+    );
+
+    assert.equal(captured.statusCode, 200);
+    assert.deepEqual(captured.body, { id: verificationId, status: 'verified' });
+
+    const rejected = await pool.query(
+      `UPDATE surety_license_verifications SET status = 'submitted' WHERE id = $1 RETURNING id`,
+      [verificationId]
+    );
+    assert.equal(rejected.rowCount, 1);
+
+    const second = response();
+    await review(
+      {
+        params: { id: verificationId },
+        body: { action: 'reject', rejectionReason: 'integration rejection' },
+        user: { id: importerId, role: 'importer' },
+      },
+      second.res,
+      () => undefined
+    );
+    assert.equal(second.captured.statusCode, 200);
+    const row = await pool.query(
+      'SELECT status, rejection_reason FROM surety_license_verifications WHERE id = $1',
+      [verificationId]
+    );
+    assert.deepEqual(row.rows[0], { status: 'rejected', rejection_reason: 'integration rejection' });
+
+    const missing = response();
+    await review(
+      {
+        params: { id: randomUUID() },
+        body: { action: 'approve' },
+        user: { id: importerId, role: 'importer' },
+      },
+      missing.res,
+      () => undefined
+    );
+    assert.equal(missing.captured.statusCode, 404);
+  });
+
+  it('#640 returns 404 and does not create a verification row when submit has no record', async () => {
+    const userId = await createUser('surety_admin', 'no-verification');
+    try {
+      const { suretyLicenseRouter } = await import('../../routes/surety-license.js');
+      const submit = routeHandler(suretyLicenseRouter, '/submit', 'post', -1);
+      const { res, captured } = response();
+
+      await submit(
+        {
+          body: { naicNumber: '12345', companyName: 'No Record Co', stateOfDomicile: 'CA' },
+          user: { id: userId, role: 'surety_admin' },
+        },
+        res,
+        () => undefined
+      );
+
+      assert.equal(captured.statusCode, 404);
+      const rows = await pool.query(
+        'SELECT id FROM surety_license_verifications WHERE user_id = $1',
+        [userId]
+      );
+      assert.equal(rows.rowCount, 0);
+    } finally {
+      await pool.query('DELETE FROM users WHERE id = $1', [userId]);
+    }
+  });
+
+  it('#636 and #637 cache JSON/CSV reports and audit only cache misses', async () => {
+    const { regulatoryRouter } = await import('../../routes/regulatory.js');
+    const handler = routeHandler(regulatoryRouter, '/state-report/:state_code', 'get');
+    const stateCode = `T${tag.slice(0, 1).toUpperCase()}`;
+    const query = { start_date: '2026-01-01', end_date: '2026-01-31' };
+
+    const jsonFirst = response();
+    await handler({ params: { state_code: stateCode }, query: { ...query, format: 'json' }, user: { id: suretyId, role: 'surety_admin', email: 'test@example.com' } }, jsonFirst.res);
+    assert.equal(jsonFirst.captured.statusCode, 200);
+    assert.equal(jsonFirst.captured.headers['x-cache'], 'MISS');
+    const jsonSecond = response();
+    await handler({ params: { state_code: stateCode }, query: { ...query, format: 'json' }, user: { id: suretyId, role: 'surety_admin', email: 'test@example.com' } }, jsonSecond.res);
+    assert.equal(jsonSecond.captured.headers['x-cache'], 'HIT');
+    assert.deepEqual(jsonSecond.captured.body, jsonFirst.captured.body);
+
+    const csvFirst = response();
+    await handler({ params: { state_code: stateCode }, query: { ...query, format: 'csv' }, user: { id: suretyId, role: 'surety_admin', email: 'test@example.com' } }, csvFirst.res);
+    assert.equal(csvFirst.captured.headers['x-cache'], 'MISS');
+    assert.match(csvFirst.captured.headers['content-type'], /^text\/csv/);
+    assert.match(csvFirst.captured.headers['content-disposition'], /filename="regulatory_report_/);
+    const csvSecond = response();
+    await handler({ params: { state_code: stateCode }, query: { ...query, format: 'csv' }, user: { id: suretyId, role: 'surety_admin', email: 'test@example.com' } }, csvSecond.res);
+    assert.equal(csvSecond.captured.headers['x-cache'], 'HIT');
+    assert.equal(csvSecond.captured.body, csvFirst.captured.body);
+
+    const audits = await pool.query(
+      `SELECT surety_id, state_code, start_date::text, end_date::text, output_format
+         FROM regulatory_report_audit_logs
+        WHERE surety_id = $1 AND state_code = $2
+        ORDER BY output_format`,
+      [suretyId, stateCode]
+    );
+    assert.deepEqual(audits.rows, [
+      { surety_id: suretyId, state_code: stateCode, start_date: '2026-01-01', end_date: '2026-01-31', output_format: 'csv' },
+      { surety_id: suretyId, state_code: stateCode, start_date: '2026-01-01', end_date: '2026-01-31', output_format: 'json' },
+    ]);
+  });
+});
