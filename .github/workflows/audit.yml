@@ -70,7 +70,12 @@ jobs:
       - name: Configure cargo-audit
         run: |
           mkdir -p .cargo
-          echo -e "[advisories]\nseverity_threshold = \"high\"" > .cargo/audit.toml
+          # RUSTSEC-2026-0387 (crypto-bigint timing variability) is ignored: it is only
+          # reachable through soroban-env-host's k256/p256 -> elliptic-curve 0.13 -> crypto-bigint
+          # 0.5 chain, which soroban-sdk compiles only for host-side builds (never for the wasm
+          # contract), and the fix (crypto-bigint >= 0.7.6) cannot satisfy elliptic-curve's ^0.5
+          # requirement. See deny.toml for the full rationale; remove once soroban-sdk moves on.
+          echo -e "[advisories]\nseverity_threshold = \"high\"\nignore = [\"RUSTSEC-2026-0387\"]" > .cargo/audit.toml
 
       - name: Run Cargo Audit
         run: |
