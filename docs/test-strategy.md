@@ -10,7 +10,7 @@ TariffShield spans three runtimes — Rust/Soroban, Node.js/Express, and Next.js
 
 1. **Contract unit tests first.** The Soroban contract holds funds on-chain and enforces invariants that cannot be patched after deployment. Every public entrypoint must have at least one test covering the happy path, every authorization boundary, and every error code. Contract tests run in a deterministic simulated Soroban environment with no network dependency.
 
-2. **API integration tests second.** The Express API connects contract state, PostgreSQL, and business rules. Integration tests run against a real (Docker) PostgreSQL instance so that SQL queries and constraint violations are exercised as they would be in production. Mocking the database is avoided because mock/production divergence has caused silent breakage in the past. Coverage is currently minimal: `apps/api/src/__tests__/integration/bonds.test.ts` verifies a bond record insert and the `bond_type_code` check-constraint enforcement (issue #747). Auth boundaries, error paths, and happy-path HTTP routes are not yet covered — see "What to Test" below.
+2. **API integration tests second.** The Express API connects contract state, PostgreSQL, and business rules. Database-backed integration tests run against a real (Docker) PostgreSQL instance so that SQL queries and constraint violations are exercised as they would be in production. Mocking the database is avoided because mock/production divergence has caused silent breakage in the past. Route coverage includes health probes and KYC upload authorization, alongside the database integration cases — see "What to Test" below.
 
 3. **SDK unit tests third.** The TypeScript SDK wraps Soroban RPC. Its unit tests mock the RPC layer to verify argument serialization, error mapping, and retry logic without requiring a live network.
 
@@ -124,6 +124,8 @@ open apps/web/playwright-report/index.html
 - **Input validation:** send bodies with missing required fields, wrong types, and values outside the allowed enum; expect `400`.
 - **Error paths:** importer not found (`404`), email conflict (`409`), OFAC hit (`403`), KYC gating (`403`), CBP deviation (`422`).
 - **Happy paths:** successful signup + login, register importer, deposit collateral, upload tariff CSV.
+- **Health probes:** `/health/live` stays 200 plain-text `OK` without calling dependencies; `/health/ready` returns plain-text `503 Service Unavailable` when any DB, Soroban, or Redis ping fails, and `200 OK` when all succeed.
+- **KYC uploads:** a surety-admin upload is rejected with 403 and inserts no row; an importer can upload to their own importer id, but receives 404 for another importer's id.
 - **Rate limit mapping:** when the contract client throws an error containing `Error(Contract, #13)`, the route must respond `429` with `Retry-After`.
 
 ### SDK methods (`packages/sdk/src/__tests__/`)
