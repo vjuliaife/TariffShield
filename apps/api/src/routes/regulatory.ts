@@ -65,7 +65,11 @@ regulatoryRouter.get('/state-report/:state_code', async (req: Request, res: Resp
 
   // 1. Enforce active license restriction for the specified state
   const licenses = await pool.query(
-    'SELECT license_number FROM surety_state_licenses WHERE surety_id = $1 AND state_code = $2',
+    `SELECT license_number
+       FROM surety_state_licenses
+      WHERE surety_id = $1
+        AND state_code = $2
+        AND (expiration_date IS NULL OR expiration_date >= CURRENT_DATE)`,
     [user.id, stateCode]
   );
 
