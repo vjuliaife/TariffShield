@@ -4,7 +4,7 @@
 
 | Tool                            | Minimum version       | Notes                                                                           |
 | ------------------------------- | --------------------- | ------------------------------------------------------------------------------- |
-| Node.js                         | 20+                   | Pinned via root `package.json` `engines.node`                                   |
+| Node.js                         | 22.15+                | Pinned via root `package.json` `engines.node`                                   |
 | npm                             | 10+                   | Ships with Node 20                                                              |
 | Rust                            | stable (2021 edition) | No strict MSRV pinned — see `Cargo.toml` / `contracts/tariff-shield/Cargo.toml` |
 | `wasm32-unknown-unknown` target | —                     | `rustup target add wasm32-unknown-unknown`                                      |
