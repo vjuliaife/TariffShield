@@ -22,6 +22,15 @@ const TX_TIMEOUT_SECONDS = 30;
 const SUBMIT_POLL_INTERVAL_MS = 1500;
 const SUBMIT_DEADLINE_MS = 60_000;
 
+/** Shown in --help and as a runtime warning, so a passing dry-run isn't mistaken for a full
+ * pre-upgrade simulation. Mirrors the caveat in the success message below. */
+const LIMITATIONS_NOTICE =
+  "Limitations: this is NOT a full upgrade simulation. It submits real transactions signed " +
+  "by the platform key (wasm upload + throwaway contract deploy), and the throwaway instance " +
+  "starts with empty storage, so it cannot catch incompatibilities with the LIVE contract's " +
+  "stored data. Rehearse propose_upgrade + approve_upgrade on testnet against real data " +
+  "before running `npm run upgrade` on mainnet.";
+
 /** Submits a prepared, signed transaction and polls until it lands, mirroring
  * packages/sdk/src/index.ts's invokeAndSubmit. Returns the transaction's
  * parsed return value (e.g. the new contract's Address for a create-contract
@@ -52,11 +61,17 @@ async function submitAndWait(
 
 program
   .name("upgrade-dry-run")
-  .description("Simulate wasm upgrade to ensure storage compatibility")
+  .description(
+    "Upload the candidate wasm and deploy it as a throwaway instance to check that it loads " +
+      "and its entrypoints execute. Does NOT verify storage compatibility with the live " +
+      "contract's existing data.",
+  )
   .requiredOption("--wasm-path <path>", "Path to the new wasm file")
   .requiredOption("--network <network>", "Network (testnet or public)")
+  .addHelpText("after", `\n${LIMITATIONS_NOTICE}`)
   .action(async (options) => {
     try {
+      console.warn(`⚠️  ${LIMITATIONS_NOTICE}\n`);
       console.log(`Starting upgrade dry-run for ${options.wasmPath} on ${options.network}...`);
 
       const rpcServer = new rpc.Server(env.STELLAR_RPC_URL);

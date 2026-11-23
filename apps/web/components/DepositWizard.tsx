@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { api } from '@/lib/api';
 import { formatApiError, type FormattedError } from '@/lib/error-formatter';
+import { buildDepositRequest } from '@/lib/deposit-request';
 import { DepositWizardTour, useDepositWizardTour } from './DepositWizardTour';
 
 type Step = 'amount' | 'preview' | 'confirm' | 'receipt';
@@ -42,8 +43,8 @@ export function DepositWizard({
     setBusy(true);
     setError(null);
     try {
-      const stroops = BigInt(Math.round(Number(xlm) * 1e7)).toString();
-      const result = await api.deposit(importerId, { amountStroops: stroops, bucket });
+      // XLM → stroops conversion lives in buildDepositRequest (unit-tested, #667).
+      const result = await api.deposit(importerId, buildDepositRequest(xlm, bucket));
       setTxHash(result.txHash);
       setStep('receipt');
       await onDone();

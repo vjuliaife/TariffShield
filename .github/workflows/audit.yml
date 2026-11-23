@@ -70,7 +70,12 @@ jobs:
       - name: Configure cargo-audit
         run: |
           mkdir -p .cargo
-          echo -e "[advisories]\nseverity_threshold = \"high\"" > .cargo/audit.toml
+          # RUSTSEC-2026-0387 (crypto-bigint timing variability) is ignored: it is only
+          # reachable through soroban-env-host's k256/p256 -> elliptic-curve 0.13 -> crypto-bigint
+          # 0.5 chain, which soroban-sdk compiles only for host-side builds (never for the wasm
+          # contract), and the fix (crypto-bigint >= 0.7.6) cannot satisfy elliptic-curve's ^0.5
+          # requirement. See deny.toml for the full rationale; remove once soroban-sdk moves on.
+          echo -e "[advisories]\nseverity_threshold = \"high\"\nignore = [\"RUSTSEC-2026-0387\"]" > .cargo/audit.toml
 
       - name: Run Cargo Audit
         run: |
@@ -210,10 +215,46 @@ jobs:
               body += 'The failure was likely caused by a license violation or duplicate crate version checked by `cargo-deny`.\n';
             }
             
+            // One open issue per ongoing problem. Opening a fresh issue every
+            // day for the same unresolved findings buries real signal under
+            // duplicates, so reuse the open issue and only touch it when the
+            // report actually changes.
+            const crypto = require('crypto');
+            const TITLE_PREFIX = 'Security: dependency vulnerability found';
             const date = new Date().toISOString().split('T')[0];
-            await github.rest.issues.create({
+            const digest = crypto.createHash('sha256').update(body).digest('hex');
+            const marker = `<!-- audit-report-sha256:${digest} -->`;
+
+            const openIssues = await github.paginate(github.rest.issues.listForRepo, {
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: `Security: dependency vulnerability found — ${date}`,
-              body: body
+              state: 'open',
+              per_page: 100,
             });
+            const existing = openIssues
+              .filter((issue) => !issue.pull_request && issue.title.startsWith(TITLE_PREFIX))
+              .sort((a, b) => a.number - b.number)[0];
+
+            if (!existing) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `${TITLE_PREFIX} — ${date}`,
+                body: `${body}\n${marker}`,
+              });
+            } else if ((existing.body || '').includes(marker)) {
+              core.info(`Open issue #${existing.number} already reports these findings; not creating a duplicate.`);
+            } else {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body: `${body}\n${marker}`,
+              });
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body: `The scheduled audit on ${date} reported different findings; the issue description has been updated.`,
+              });
+            }

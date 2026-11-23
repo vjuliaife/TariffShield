@@ -1,15 +1,35 @@
 /**
- * Verification test script for the regulatory compliance report API.
+ * scripts/test-regulatory-report.ts
  *
- * Assumes the API server is running at http://localhost:3002.
- * Run with: npx tsx scripts/test-regulatory-report.ts
+ * Manual verification harness for the per-state regulatory compliance report
+ * API (`GET /api/v1/regulatory/state-report/:state`, apps/api/src/routes/regulatory.ts).
+ * See docs/compliance/regulatory-report-verification.md for context.
  *
- * Tests:
+ * Status: intentionally ad hoc. It is NOT invoked by any CI workflow
+ * (.github/workflows/* does not reference it; checked via `grep -r` and
+ * `git log -- scripts/test-regulatory-report.ts`, which shows it was added
+ * with the regulatory report API in e37fea9 and never wired into CI). It
+ * creates a throwaway surety_admin user, a state license and an audit-log
+ * entry (removed again in the final cleanup step), so run it only against a
+ * local/dev database.
+ *
+ * Invocation (from the repo root):
+ *   npm run test:regulatory-report
+ *   # or: npx tsx scripts/test-regulatory-report.ts
+ *
+ * Prerequisites:
+ *   - Postgres running and migrated (`docker compose up -d postgres && npm run migrate`)
+ *   - `.env` with DATABASE_URL (loaded via dotenv; used to seed/inspect rows directly)
+ *   - API server running at http://localhost:3002 (`npm run dev:api`)
+ *
+ * Checks:
  *   1. JSON report for a licensed state returns 200 with correct shape
- *   2. CSV format returns text/csv content-type
- *   3. Unlicensed state returns 403
- *   4. Second identical request gets X-Cache: HIT
+ *   2. Second identical request gets X-Cache: HIT
+ *   3. CSV format returns text/csv content-type
+ *   4. Unlicensed state returns 403
  *   5. Audit log entry is created in the DB
+ *
+ * Exits non-zero if any assertion fails.
  */
 
 import "dotenv/config";

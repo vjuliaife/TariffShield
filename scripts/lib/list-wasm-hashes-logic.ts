@@ -101,3 +101,67 @@ export function selectPreviousDeployment(
 ): DeploymentRecord | undefined {
   return sortedDeployments.length >= 2 ? sortedDeployments[1] : undefined;
 }
+
+export type OutputFormat = "table" | "json";
+
+export class InvalidFormatError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidFormatError";
+  }
+}
+
+/**
+ * Parses `--format <table|json>` / `--format=<table|json>` from argv.
+ * Defaults to "table". Throws InvalidFormatError on an unknown or missing value.
+ */
+export function parseFormat(argv: string[]): OutputFormat {
+  let value: string | undefined;
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "--format") {
+      value = argv[i + 1];
+      if (value === undefined) {
+        throw new InvalidFormatError("--format requires a value (table|json)");
+      }
+      break;
+    }
+    if (arg.startsWith("--format=")) {
+      value = arg.slice("--format=".length);
+      break;
+    }
+  }
+  if (value === undefined) return "table";
+  if (value === "table" || value === "json") return value;
+  throw new InvalidFormatError(
+    `Invalid --format "${value}" (expected "table" or "json")`,
+  );
+}
+
+/**
+ * Renders deployments as an aligned plain-text table with wasm hash, deploy
+ * timestamp, and deployer columns (plus network/version for context). The
+ * first row (most recent, when given sorted input) is marked CURRENT.
+ */
+export function formatTable(deployments: DeploymentRecord[]): string {
+  const headers = ["#", "WASM HASH", "DEPLOYED AT", "DEPLOYED BY", "NETWORK", "VERSION"];
+  const rows = deployments.map((d, i) => [
+    `${i + 1}${i === 0 ? "*" : ""}`,
+    d.wasmHash,
+    d.deployedAt,
+    d.deployedBy || "unknown",
+    d.network,
+    d.version || "unknown",
+  ]);
+  const widths = headers.map((h, col) =>
+    Math.max(h.length, ...rows.map((r) => r[col].length)),
+  );
+  const line = (cells: string[]) =>
+    cells.map((c, col) => c.padEnd(widths[col])).join("  ").trimEnd();
+  return [
+    line(headers),
+    line(widths.map((w) => "-".repeat(w))),
+    ...rows.map(line),
+    ...(rows.length > 0 ? ["", "* = current"] : []),
+  ].join("\n");
+}

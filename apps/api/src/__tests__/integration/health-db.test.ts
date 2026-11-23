@@ -1,6 +1,6 @@
 /**
  * Tests for the pool configuration and GET /health/db endpoint added by #241,
- * and the JSON bodies of GET /health/live and /health/ready (#973).
+ * plus the liveness/readiness probe contracts (#621-623).
  *
  * Run via: node --import tsx/esm --test src/__tests__/integration/health-db.test.ts
  *
@@ -12,6 +12,10 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import express from 'express';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import type { HealthDependencies } from '../../routes/health.js';
 
 function stub(name: string, value: string) {
   if (!process.env[name]) process.env[name] = value;
@@ -82,44 +86,125 @@ describe('GET /health/db route (#241)', () => {
   });
 });
 
-// #973 — /live and /ready return JSON with a `status` field, like / and /db.
-function findGetHandler(healthRouter: any, path: string) {
-  const layer = (healthRouter.stack as any[]).find(
-    (l) => l.route?.path === path && l.route.methods.get
-  );
-  assert.ok(layer, `GET ${path} route must be registered on healthRouter`);
-  return layer.route.stack[0].handle;
-}
-
-function mockRes() {
-  const captured: { statusCode: number; body: unknown } = { statusCode: 200, body: undefined };
-  const res = {
-    status(code: number) {
-      captured.statusCode = code;
-      return this;
-    },
-    json(payload: unknown) {
-      captured.body = payload;
-      return this;
-    },
-  };
-  return { res, captured };
-}
-
-describe('GET /health/live and /health/ready JSON bodies (#973)', () => {
-  it('/live returns 200 with { status: "ok" }', async () => {
-    const { healthRouter } = await import('../../routes/health.js');
-    const { res, captured } = mockRes();
-    await findGetHandler(healthRouter, '/live')({} as any, res as any, (() => {}) as any);
-    assert.equal(captured.statusCode, 200);
-    assert.deepEqual(captured.body, { status: 'ok' });
+async function requestHealth(path: string, dependencies: HealthDependencies) {
+  const { createHealthRouter } = await import('../../routes/health.js');
+  const server = createServer(express().use('/health', createHealthRouter(dependencies)));
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
   });
 
-  it('/ready returns 503 with { status: "degraded" } when a dependency is unreachable', async () => {
-    const { healthRouter } = await import('../../routes/health.js');
-    const { res, captured } = mockRes();
-    await findGetHandler(healthRouter, '/ready')({} as any, res as any, (() => {}) as any);
-    assert.equal(captured.statusCode, 503);
-    assert.deepEqual(captured.body, { status: 'degraded' });
+  try {
+    const address = server.address() as AddressInfo;
+    return await fetch(`http://127.0.0.1:${address.port}/health${path}`, {
+      headers: { connection: 'close' },
+    });
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+}
+
+describe('GET /health/live and /health/ready probes (#621-623)', () => {
+  it('/health reports the database failure while preserving independent checks', async () => {
+    const response = await requestHealth('/', {
+      ping: async () => {
+        throw new Error('database unavailable');
+      },
+      pingRpc: async () => {},
+      pingRedis: async () => {},
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 503);
+    assert.equal(body.status, 'degraded');
+    assert.equal(typeof body.version, 'string');
+    assert.equal(body.db, 'failed');
+    assert.equal(body.soroban, 'ok');
+    assert.equal(body.redis, 'connected');
+  });
+
+  it('/health reports version and network details when all dependencies are available', async () => {
+    const response = await requestHealth('/', {
+      ping: async () => {},
+      pingRpc: async () => {},
+      pingRedis: async () => {},
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.status, 'ok');
+    assert.equal(typeof body.version, 'string');
+    assert.equal(body.contractId, 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA');
+    assert.equal(body.network, 'testnet');
+  });
+
+  it('/live returns immediate plain-text 200 without calling any dependency', async () => {
+    const calls = { db: 0, soroban: 0, redis: 0 };
+    const dependencies: HealthDependencies = {
+      ping: async () => {
+        calls.db++;
+        throw new Error('database unavailable');
+      },
+      pingRpc: async () => {
+        calls.soroban++;
+        throw new Error('Soroban unavailable');
+      },
+      pingRedis: async () => {
+        calls.redis++;
+        throw new Error('Redis unavailable');
+      },
+    };
+
+    const response = await requestHealth('/live', dependencies);
+
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('content-type') ?? '', /^text\/plain(?:;|$)/);
+    assert.equal(await response.text(), 'OK');
+    assert.deepEqual(calls, { db: 0, soroban: 0, redis: 0 });
+  });
+
+  for (const [dependency, failing] of [
+    ['db', 'ping'],
+    ['soroban', 'pingRpc'],
+    ['redis', 'pingRedis'],
+  ] as const) {
+    it(`/ready returns plain-text 503 when ${dependency} is unavailable`, async () => {
+      const calls = { ping: 0, pingRpc: 0, pingRedis: 0 };
+      const dependencies: HealthDependencies = {
+        ping: async () => {
+          calls.ping++;
+          if (failing === 'ping') throw new Error(`${dependency} unavailable`);
+        },
+        pingRpc: async () => {
+          calls.pingRpc++;
+          if (failing === 'pingRpc') throw new Error(`${dependency} unavailable`);
+        },
+        pingRedis: async () => {
+          calls.pingRedis++;
+          if (failing === 'pingRedis') throw new Error(`${dependency} unavailable`);
+        },
+      };
+
+      const response = await requestHealth('/ready', dependencies);
+
+      assert.equal(response.status, 503);
+      assert.match(response.headers.get('content-type') ?? '', /^text\/plain(?:;|$)/);
+      assert.equal(await response.text(), 'Service Unavailable');
+      assert.deepEqual(calls, { ping: 1, pingRpc: 1, pingRedis: 1 });
+    });
+  }
+
+  it('/ready returns plain-text 200 when all dependencies are available', async () => {
+    const response = await requestHealth('/ready', {
+      ping: async () => {},
+      pingRpc: async () => {},
+      pingRedis: async () => {},
+    });
+
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('content-type') ?? '', /^text\/plain(?:;|$)/);
+    assert.equal(await response.text(), 'OK');
   });
 });

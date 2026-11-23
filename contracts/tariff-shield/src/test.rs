@@ -995,14 +995,16 @@ fn benchmark_bulk_enforcement_paths() {
         for _ in 0..signer_count {
             current_signers.push_back(Address::generate(&s.env));
         }
-        s.env
-            .storage()
-            .instance()
-            .set(&DataKey::OracleSigners, &current_signers);
-        s.env
-            .storage()
-            .instance()
-            .set(&DataKey::OracleThreshold, &2u32);
+        s.env.as_contract(&s.contract_id, || {
+            s.env
+                .storage()
+                .instance()
+                .set(&DataKey::OracleSigners, &current_signers);
+            s.env
+                .storage()
+                .instance()
+                .set(&DataKey::OracleThreshold, &2u32);
+        });
 
         let mut new_signers = soroban_sdk::Vec::new(&s.env);
         for _ in 0..3 {
@@ -1061,6 +1063,7 @@ fn benchmark_register_importer_scaling() {
                     dispute_expires_at: 0,
                     pre_dispute_required: 100_000_0000000,
                     dispute_raised: false,
+                    is_sandbox: false,
                     oracle_last_updated: 0,
                 };
                 s.env.storage().persistent().set(&key, &account);

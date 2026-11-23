@@ -3,17 +3,150 @@
 set -euo pipefail
 
 # Quarterly disaster recovery drill script
-# Restores from latest encrypted backup, validates schema and data, then deletes temporary instance
+# Restores from the latest encrypted backup, validates schema and data, then deletes the temporary instance.
+#
+# Usage:
+#   bash scripts/backup-restore-drill.sh                  # real drill (requires AWS credentials + RDS access)
+#   bash scripts/backup-restore-drill.sh --dry-run        # offline dry run: mocked aws/psql, canned data
+#   LOCAL_DRY_RUN=1 bash scripts/backup-restore-drill.sh  # same as --dry-run
+#   bash scripts/backup-restore-drill.sh --help
+#
+# Dry-run mode mocks the `aws` and `psql` CLIs with canned output, skips instance
+# creation/wait/deletion, S3 uploads, and DynamoDB writes, but still writes
+# DRILL_REPORT_FILE so report-shape changes can be validated locally.
+# See docs/runbooks/backup-restore-drill.md.
+
+usage() {
+  cat <<'EOF'
+Usage: backup-restore-drill.sh [--dry-run] [--help]
+
+  --dry-run  Run the drill with mocked aws/psql calls and canned data. No RDS
+             instance is created, waited on, or deleted; no S3 or DynamoDB
+             writes happen. The drill report is still written to
+             DRILL_REPORT_FILE (default: dr-drill-<timestamp>.json).
+             Also enabled with LOCAL_DRY_RUN=1.
+  --help     Show this help.
+
+Environment:
+  AWS_REGION             AWS region (default: us-east-1)
+  TEMP_DB_SUBNET_GROUP   Subnet group for the temporary instance (default: default-postgres)
+  DRILL_REPORT_FILE      Path for the JSON report (default: dr-drill-<timestamp>.json)
+  DB_USER / DB_NAME      Database credentials used by the validation queries
+  DR_EXPORT_S3_KEY       Optional encrypted export key; skipped in dry-run
+EOF
+}
+
+DRY_RUN=false
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run) DRY_RUN=true ;;
+    --help|-h) usage; exit 0 ;;
+    *)
+      echo "[ERROR] Unknown argument: $arg"
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+if [ "${LOCAL_DRY_RUN:-0}" = "1" ] || [ "${LOCAL_DRY_RUN:-}" = "true" ]; then
+  DRY_RUN=true
+fi
 
 REGION="${AWS_REGION:-us-east-1}"
 PROD_DB_INSTANCE="tariffshield-prod"
 TEMP_DB_INSTANCE="tariffshield-dr-test-$(date +%s)"
 TEMP_DB_SUBNET_GROUP="${TEMP_DB_SUBNET_GROUP:-default-postgres}"
 DRILL_DATE=$(date -u '+%Y-%m-%d %H:%M:%SZ')
-DRILL_REPORT_FILE="dr-drill-${DRILL_DATE}.json"
+DRILL_REPORT_FILE="${DRILL_REPORT_FILE:-dr-drill-${DRILL_DATE}.json}"
+DB_USER="${DB_USER:-tariffshield}"
+DB_NAME="${DB_NAME:-tariffshield}"
+DB_PASSWORD="${DB_PASSWORD:-}"
+REPORT_MODE="live"
+DRILL_NOTES="Quarterly DR drill - restoration and validation successful"
 
-echo "[INFO] DR Drill started at $DRILL_DATE"
+# Tables the restored schema must contain (also emitted by the dry-run psql shim)
+EXPECTED_TABLES=("users" "importers" "tariff_uploads" "contract_events" "oracle_alerts" "aml_screenings" "security_incidents" "data_erasure_requests")
+
+if [ "$DRY_RUN" = "true" ]; then
+  TEMP_DB_INSTANCE="tariffshield-dr-test-dry-run"
+  REPORT_MODE="dry-run"
+  DRILL_NOTES="Local dry run - canned aws/psql data; no instance was created or deleted"
+  echo "[INFO] DR Drill started at $DRILL_DATE (dry-run: mocked aws/psql, canned data)"
+else
+  echo "[INFO] DR Drill started at $DRILL_DATE"
+fi
 echo "[INFO] Temporary instance: $TEMP_DB_INSTANCE"
+
+# ── aws shim ────────────────────────────────────────────────────────────────
+# In dry-run mode the read-only `aws` lookups return canned values so the
+# drill's control flow can run without credentials. Mutating calls (restore,
+# wait, delete, upload, put-item) are skipped explicitly at their call sites.
+aws() {
+  if [ "$DRY_RUN" != "true" ]; then
+    command aws "$@"
+    return
+  fi
+
+  local args="$*"
+  case "$args" in
+    *describe-db-snapshots*)
+      echo "rds:tariffshield-prod-2026-01-01-00-00"
+      ;;
+    *describe-db-instances*Endpoint.Address*)
+      echo "tariffshield-dr-test.example.us-east-1.rds.amazonaws.com"
+      ;;
+    *describe-db-instances*Endpoint.Port*)
+      echo "5432"
+      ;;
+    *)
+      echo "[dry-run] would run: aws $args"
+      ;;
+  esac
+}
+
+# ── psql shim ───────────────────────────────────────────────────────────────
+# Dry-run mode has no reachable restored instance, so validation queries return
+# canned results. The expected table list is printed verbatim so the schema
+# check below still executes against it.
+psql() {
+  if [ "$DRY_RUN" != "true" ]; then
+    command psql "$@"
+    return
+  fi
+
+  local sql="" prev=""
+  for arg in "$@"; do
+    if [ "$prev" = "-c" ] || [ "$prev" = "-tc" ]; then
+      sql="$arg"
+    fi
+    prev="$arg"
+  done
+
+  case "$sql" in
+    "SELECT 1")
+      return 0
+      ;;
+    *information_schema.tables*)
+      printf '%s\n' "${EXPECTED_TABLES[@]}"
+      ;;
+    *"COUNT(*) FROM users"*)
+      echo "3"
+      ;;
+    *"COUNT(*) FROM importers WHERE"*)
+      echo "2"
+      ;;
+    *"COUNT(*) FROM importers"*)
+      echo "2"
+      ;;
+    *"COUNT(*) FROM contract_events"*)
+      echo "6"
+      ;;
+    *)
+      echo "0"
+      ;;
+  esac
+}
 
 # Step 1: Find latest encrypted snapshot
 echo "[INFO] Locating latest encrypted snapshot..."
@@ -31,21 +164,25 @@ fi
 echo "[INFO] Using snapshot: $LATEST_SNAPSHOT"
 
 # Step 2: Restore to temporary instance
-echo "[INFO] Restoring snapshot to temporary instance: $TEMP_DB_INSTANCE"
-aws rds restore-db-instance-from-db-snapshot \
-  --region "$REGION" \
-  --db-instance-identifier "$TEMP_DB_INSTANCE" \
-  --db-snapshot-identifier "$LATEST_SNAPSHOT" \
-  --publicly-accessible false \
-  --multi-az false \
-  --enable-cloudwatch-logs-exports postgresql
+if [ "$DRY_RUN" = "true" ]; then
+  echo "[INFO] [dry-run] Skipping snapshot restore; no instance is created"
+else
+  echo "[INFO] Restoring snapshot to temporary instance: $TEMP_DB_INSTANCE"
+  aws rds restore-db-instance-from-db-snapshot \
+    --region "$REGION" \
+    --db-instance-identifier "$TEMP_DB_INSTANCE" \
+    --db-snapshot-identifier "$LATEST_SNAPSHOT" \
+    --publicly-accessible false \
+    --multi-az false \
+    --enable-cloudwatch-logs-exports postgresql
 
-echo "[INFO] Waiting for temporary instance to be available (may take 5-10 minutes)..."
-aws rds wait db-instance-available \
-  --region "$REGION" \
-  --db-instance-identifier "$TEMP_DB_INSTANCE"
+  echo "[INFO] Waiting for temporary instance to be available (may take 5-10 minutes)..."
+  aws rds wait db-instance-available \
+    --region "$REGION" \
+    --db-instance-identifier "$TEMP_DB_INSTANCE"
 
-echo "[INFO] Temporary instance is available"
+  echo "[INFO] Temporary instance is available"
+fi
 
 # Step 3: Get temporary instance endpoint
 TEMP_ENDPOINT=$(aws rds describe-db-instances \
@@ -85,7 +222,6 @@ echo "[INFO] Validating schema integrity..."
 TABLES=$(psql -h "$TEMP_ENDPOINT" -U "$DB_USER" -d "$DB_NAME" -p "$TEMP_PORT" -tc \
   "SELECT table_name FROM information_schema.tables WHERE table_schema='public' ORDER BY table_name;")
 
-EXPECTED_TABLES=("users" "importers" "tariff_uploads" "contract_events" "oracle_alerts" "aml_screenings" "security_incidents" "data_erasure_requests")
 MISSING_TABLES=()
 
 for expected in "${EXPECTED_TABLES[@]}"; do
@@ -128,7 +264,9 @@ EVENTS_COUNT=$(psql -h "$TEMP_ENDPOINT" -U "$DB_USER" -d "$DB_NAME" -p "$TEMP_PO
 echo "[INFO] Contract events table: $EVENTS_COUNT rows"
 
 # Step 7: Decrypt and verify export file (if available)
-if [ -n "${DR_EXPORT_S3_KEY:-}" ]; then
+if [ "$DRY_RUN" = "true" ] && [ -n "${DR_EXPORT_S3_KEY:-}" ]; then
+  echo "[INFO] [dry-run] Skipping encrypted export validation for $DR_EXPORT_S3_KEY"
+elif [ -n "${DR_EXPORT_S3_KEY:-}" ]; then
   echo "[INFO] Validating encrypted backup export file..."
 
   # Retrieve encryption key from Secrets Manager
@@ -151,6 +289,7 @@ DRILL_STATUS="PASSED"
 REPORT_JSON=$(cat <<EOF
 {
   "drill_timestamp": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')",
+  "mode": "$REPORT_MODE",
   "status": "$DRILL_STATUS",
   "source_snapshot": "$LATEST_SNAPSHOT",
   "temp_instance": "$TEMP_DB_INSTANCE",
@@ -164,7 +303,7 @@ REPORT_JSON=$(cat <<EOF
     "contract_events_count": $EVENTS_COUNT,
     "ein_format_validation": "OK"
   },
-  "notes": "Quarterly DR drill - restoration and validation successful"
+  "notes": "$DRILL_NOTES"
 }
 EOF
 )
@@ -172,29 +311,45 @@ EOF
 echo "$REPORT_JSON" | tee "$DRILL_REPORT_FILE"
 
 # Step 9: Upload report to S3 for auditor review
-echo "[INFO] Uploading drill report to S3..."
-aws s3 cp "$DRILL_REPORT_FILE" "s3://tariffshield-compliance/dr-drills/$DRILL_REPORT_FILE"
+if [ "$DRY_RUN" = "true" ]; then
+  echo "[INFO] [dry-run] Skipping upload of $DRILL_REPORT_FILE to S3"
+else
+  echo "[INFO] Uploading drill report to S3..."
+  aws s3 cp "$DRILL_REPORT_FILE" "s3://tariffshield-compliance/dr-drills/$DRILL_REPORT_FILE"
+fi
 
 # Step 10: Record drill in DynamoDB
-echo "[INFO] Recording drill event..."
-aws dynamodb put-item \
-  --region "$REGION" \
-  --table-name backup-drills \
-  --item "{
-    \"drill_id\": {\"S\": \"$(date -u '+%Y-%m-%d')\"},
-    \"drill_timestamp\": {\"S\": \"$(date -u '+%Y-%m-%dT%H:%M:%SZ')\"},
-    \"source_snapshot\": {\"S\": \"$LATEST_SNAPSHOT\"},
-    \"status\": {\"S\": \"$DRILL_STATUS\"},
-    \"temp_instance\": {\"S\": \"$TEMP_DB_INSTANCE\"},
-    \"report_s3_key\": {\"S\": \"dr-drills/$DRILL_REPORT_FILE\"}
-  }"
+if [ "$DRY_RUN" = "true" ]; then
+  echo "[INFO] [dry-run] Skipping DynamoDB drill record"
+else
+  echo "[INFO] Recording drill event..."
+  aws dynamodb put-item \
+    --region "$REGION" \
+    --table-name backup-drills \
+    --item "{
+      \"drill_id\": {\"S\": \"$(date -u '+%Y-%m-%d')\"},
+      \"drill_timestamp\": {\"S\": \"$(date -u '+%Y-%m-%dT%H:%M:%SZ')\"},
+      \"source_snapshot\": {\"S\": \"$LATEST_SNAPSHOT\"},
+      \"status\": {\"S\": \"$DRILL_STATUS\"},
+      \"temp_instance\": {\"S\": \"$TEMP_DB_INSTANCE\"},
+      \"report_s3_key\": {\"S\": \"dr-drills/$DRILL_REPORT_FILE\"}
+    }"
+fi
 
 # Step 11: Delete temporary instance
-echo "[INFO] Deleting temporary instance $TEMP_DB_INSTANCE..."
-aws rds delete-db-instance \
-  --region "$REGION" \
-  --db-instance-identifier "$TEMP_DB_INSTANCE" \
-  --skip-final-snapshot
+if [ "$DRY_RUN" = "true" ]; then
+  echo "[INFO] [dry-run] Skipping deletion of $TEMP_DB_INSTANCE (no instance was created)"
+else
+  echo "[INFO] Deleting temporary instance $TEMP_DB_INSTANCE..."
+  aws rds delete-db-instance \
+    --region "$REGION" \
+    --db-instance-identifier "$TEMP_DB_INSTANCE" \
+    --skip-final-snapshot
+fi
 
-echo "[INFO] DR drill completed successfully"
+if [ "$DRY_RUN" = "true" ]; then
+  echo "[INFO] DR drill dry-run completed successfully (no AWS resources touched)"
+else
+  echo "[INFO] DR drill completed successfully"
+fi
 echo "[INFO] Report: $DRILL_REPORT_FILE"

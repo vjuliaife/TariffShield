@@ -29,23 +29,6 @@ async function loadImporterFor(req: Request, importerId: string) {
   return r.rows[0] ?? null;
 }
 
-async function loadTicketFor(req: Request, ticketId: string) {
-  const user = (req as AuthedRequest).user;
-  const r = await pool.query(
-    `SELECT t.*, i.user_id AS importer_user_id
-     FROM support_tickets t
-     JOIN importers i ON i.id = t.importer_id
-     WHERE t.id = $1`,
-    [ticketId]
-  );
-  const ticket = r.rows[0];
-  if (!ticket) return null;
-  if (user.role !== 'surety_admin' && ticket.importer_user_id !== user.id) {
-    return null;
-  }
-  return ticket;
-}
-
 function serializeTicket(t: any) {
   return {
     id: t.id,

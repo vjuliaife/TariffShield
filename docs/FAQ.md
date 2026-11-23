@@ -1,7 +1,8 @@
 # TariffShield Developer FAQ
 
 > Answers to the 10 most common setup and runtime issues reported by contributors.  
-> **Can't find your error?** Search by keyword (⌘F / Ctrl+F) — each entry includes the exact log snippet you'd see.
+> **Can't find your error?** Search by keyword (⌘F / Ctrl+F) — each entry includes the exact log snippet you'd see.  
+> **Still stuck after following this FAQ?** See [Stuck on local setup?](local-dev.md#stuck-on-local-setup) for the contributor support channel on GitHub Issues (distinct from production on-call escalation in [support-escalation.md](runbooks/support-escalation.md)).
 
 ---
 
@@ -19,6 +20,7 @@
 | `NEXT_PUBLIC_`, `undefined` in browser | [FAQ 8 — NEXT_PUBLIC_* vars not visible in browser](#8-next_public_-vars-not-visible-in-the-browser) |
 | `jwt expired`, `TokenExpiredError`, `401` | [FAQ 9 — JWT token expired during development](#9-jwt-token-expired-errors-during-development) |
 | `port 5432`, `address already in use`, `EADDRINUSE` | [FAQ 10 — docker-compose port conflict on 5432](#10-docker-compose-port-conflict-on-5432) |
+| `stellar: command not found`, `wasm32`, `psql`, `6379` | [Local development troubleshooting](#local-development-troubleshooting) |
 
 ---
 
@@ -37,7 +39,7 @@ Error: connect ECONNREFUSED 127.0.0.1:5443
 
 1. Wait for the healthcheck to pass before starting the API:
    ```bash
-   make db          # starts only Postgres and waits for healthy status
+   make db          # starts only Postgres and waits for healthy status (60s timeout)
    make dev         # then start the API
    ```
 2. If running manually, poll until ready:
@@ -84,6 +86,7 @@ there so they are never committed.
 Then fill in the required secrets. At minimum you need `JWT_SECRET` (any 64-hex-char string) and `PLATFORM_STELLAR_SECRET` / `SURETY_STELLAR_SECRET` (generate with `stellar keys generate`). All required variables are documented in `apps/api/.env.example`.
 
 You can also run the automated env setup script:
+
 ```bash
 make setup-env   # calls scripts/setup-env.ts to scaffold missing values
 ```
@@ -111,6 +114,7 @@ Error: unable to verify the first certificate
 **Cause (SSL):** Corporate VPNs or proxies inject a custom root CA that Node.js doesn't trust by default.
 
 **Fix (timeout):**
+
 ```bash
 # Retry is built in; if it persists, switch to a community RPC:
 STELLAR_RPC_URL=https://soroban-testnet.stellar.org  # default in .env.example
@@ -118,6 +122,7 @@ STELLAR_RPC_URL=https://soroban-testnet.stellar.org  # default in .env.example
 ```
 
 **Fix (SSL):**
+
 ```bash
 # Point Node.js at your system CA bundle
 export NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt  # Linux
@@ -269,7 +274,7 @@ The Makefile `make setup-env` funds the platform and surety keypairs automatical
 
 ```js
 // In browser console:
-console.log(process.env.NEXT_PUBLIC_API_URL) // undefined
+console.log(process.env.NEXT_PUBLIC_API_URL); // undefined
 ```
 
 **Cause:** Next.js inlines `NEXT_PUBLIC_*` variables at **build time**, not at runtime. If the `.env.local` file is added or changed after `next build`, the old baked-in values (or `undefined`) are still in the bundle.
@@ -286,6 +291,7 @@ npm run start   # or: npm run dev (dev server re-reads on restart)
 In development (`npm run dev`), the dev server watches `.env.local` changes but requires a **restart** — not just a hot-reload — to pick up new `NEXT_PUBLIC_*` values.
 
 The canonical variables are documented in `apps/web/.env.example`:
+
 ```
 NEXT_PUBLIC_API_URL=http://localhost:3002
 NEXT_PUBLIC_STELLAR_NETWORK=testnet
@@ -299,7 +305,7 @@ NEXT_PUBLIC_CONTRACT_ID=...
 **Q:** API calls return 401 after working fine earlier in the day.
 
 ```json
-{"error": "invalid token"}
+{ "error": "invalid token" }
 ```
 
 ```
@@ -322,6 +328,7 @@ curl -X POST http://localhost:3002/auth/login \
 In the browser, open DevTools → Application → Local Storage → clear `tariffshield_token`, then log in again. The web app's auth hook (`apps/web/lib/auth.ts`) detects the 401 and redirects to `/login` automatically.
 
 To avoid this during long development sessions, set a longer expiry in `.env`:
+
 ```
 JWT_EXPIRES_IN=7d
 ```
@@ -357,19 +364,47 @@ brew services stop postgresql@16  # macOS
 
 ---
 
+## Local development troubleshooting
+
+Short fixes for errors you may hit before the API even starts. See also [FAQ 1](#1-postgres-connection-refused-on-startup) and [FAQ 4](#4-cargo-build-failing-due-to-missing-libpq-or-openssl).
+
+### `stellar: command not found`
+
+**Error:** `/bin/sh: stellar: command not found` when running a deploy/upgrade script (`scripts/deploy-contracts.ts` shells out to `stellar contract deploy`). Note that `npm run contract:build` only needs `cargo`.
+**Fix:** install the Stellar CLI (`brew install stellar-cli` or `cargo install --locked stellar-cli`), then confirm with `stellar --version`.
+
+### `can't find crate for core` / wasm32 target not installed
+
+**Error:** `npm run contract:build` fails with `error[E0463]: can't find crate for 'core'` and a note that the `wasm32-unknown-unknown` target may not be installed.
+**Fix:** `rustup target add wasm32-unknown-unknown`, then re-run `npm run contract:build`.
+
+### `psql` can't connect, or connects to the wrong database
+
+**Error:** bare `psql -U tariffshield tariffshield` fails with `connection refused` (nothing on 5432) or `password authentication failed` (a *local* Postgres on 5432 answered instead). The Docker Postgres is published on host port **5443**, not 5432.
+**Fix:** pass the port: `psql -h localhost -p 5443 -U tariffshield -d tariffshield`, or `psql "$DATABASE_URL"`.
+
+### `ECONNREFUSED 127.0.0.1:6379` from BullMQ / cache calls
+
+**Error:** queue workers or cached routes fail with `connect ECONNREFUSED 127.0.0.1:6379`; Redis is not running.
+**Fix:** `docker compose up -d redis` (or `make dev`, which starts Postgres and Redis), and check `REDIS_URL=redis://localhost:6379` in `apps/api/.env`.
+
+---
+
 ## Contributing to this FAQ
 
 If you resolved a setup issue not covered here:
 
 1. Add a new numbered entry following the template:
-   ```
+   ````
    ## N. Short symptom title
    **Q:** What the developer sees / asks.
    ```<language>
    exact error message or log snippet
-   ```
+   ````
    **Cause:** Root cause explanation.
    **Fix:** Step-by-step resolution with exact commands.
+   ```
+
    ```
 2. Add a row to the **Quick Links** table at the top with the most searchable error keyword.
 3. Open a PR with `docs:` prefix in the title, e.g. `docs: add FAQ entry for X`.

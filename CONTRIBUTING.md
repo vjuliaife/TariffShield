@@ -2,15 +2,32 @@
 
 ## Prerequisites
 
-| Tool | Minimum version | Notes |
-|------|------------------|-------|
-| Node.js | 20+ | Pinned via root `package.json` `engines.node` |
-| npm | 10+ | Ships with Node 20 |
-| Rust | stable (2021 edition) | No strict MSRV pinned — see `Cargo.toml` / `contracts/tariff-shield/Cargo.toml` |
-| `wasm32-unknown-unknown` target | — | `rustup target add wasm32-unknown-unknown` |
-| Stellar CLI | latest | https://developers.stellar.org/docs/tools/cli |
-| Docker Desktop | latest | Runs local Postgres via `docker-compose.yml` |
-| PostgreSQL client (`psql`) | any recent | For inspecting the local database directly |
+| Tool                            | Minimum version       | Notes                                                                           |
+| ------------------------------- | --------------------- | ------------------------------------------------------------------------------- |
+| Node.js                         | 20+                   | Pinned via root `package.json` `engines.node`                                   |
+| npm                             | 10+                   | Ships with Node 20                                                              |
+| Rust                            | stable (2021 edition) | No strict MSRV pinned — see `Cargo.toml` / `contracts/tariff-shield/Cargo.toml` |
+| `wasm32-unknown-unknown` target | —                     | `rustup target add wasm32-unknown-unknown`                                      |
+| Stellar CLI                     | latest                | https://developers.stellar.org/docs/tools/cli                                   |
+| Docker Desktop                  | latest                | Runs local Postgres via `docker-compose.yml`                                    |
+| PostgreSQL client (`psql`)      | any recent            | For inspecting the local database directly                                      |
+
+### Toolchain alignment
+
+The project runs on **Node 20**: `.nvmrc`, every CI `node-version`, the
+`apps/*/Dockerfile` base images and the devcontainer all use Node 20. Root
+`engines.node` (`>=20`) starts at the same major. `@types/node` in `apps/api`,
+`apps/web` and `packages/sdk` is pinned to `^20.x`, so code cannot type-check
+against Node 22/24 APIs that do not exist at runtime. To move to a newer
+Node, bump all of these together.
+
+The contract's `ed25519-dalek = "2"` dev-dependency pin works around
+soroban-env-host 22.x leaving dalek unbounded. See the comment in
+`contracts/tariff-shield/Cargo.toml`. Remove the pin when soroban-sdk moves
+to a soroban-env-host that bounds dalek itself.
+
+`npm run check:toolchain` checks both of these and fails on drift. The same
+checks run in `npm run test:scripts`.
 
 ## Development Setup
 
@@ -20,6 +37,7 @@ See [README.md](README.md) for the full walkthrough (Docker Compose, Stellar tes
 # 1. Clone and install
 git clone https://github.com/vjuliaife/TariffShield.git && cd TariffShield
 npm install
+npm run build --workspace=packages/sdk   # scripts importing "@tariffshield/sdk" resolve via dist/ (see docs/sdk-tutorial.md)
 
 # 2. Rust toolchain
 rustup target add wasm32-unknown-unknown
@@ -49,11 +67,11 @@ curl -f http://localhost:3002/health   # should return 200
 npm run e2e                            # exercises signup → register → deposit → top-up
 ```
 
-See [docs/local-dev.md](docs/local-dev.md) for troubleshooting local environment issues.
+See [docs/local-dev.md](docs/local-dev.md) for troubleshooting local environment issues and the [contributor support channel](docs/local-dev.md#stuck-on-local-setup) if stuck.
 
 ### Code Style
 
-- **TypeScript** (`apps/api`, `apps/web`, `packages/sdk`): `strict` mode is enabled in every `tsconfig.json` — do not disable it or add `any` to work around a type error. Follow the existing import order (external packages, then internal `@tariffshield/*` / relative imports). Run before pushing:
+- **TypeScript** (`apps/api`, `apps/web`, `packages/sdk`): `strict` mode is enabled in every `tsconfig.json` — do not disable it or add `any` to work around a type error. Follow the existing import order (external packages, then internal `@tariffshield/*` / relative imports). Shared lint rules live in [`packages/eslint-config`](packages/eslint-config/README.md) — the root `eslint.config.mjs` applies them to every workspace, and a workspace that needs extra rules adds its own `eslint.config.mjs` that includes them (as `apps/web` does). Run before pushing:
   ```bash
   npm run typecheck                      # runs typecheck in every workspace that defines it
   npm run lint --workspace=apps/api      # eslint --max-warnings 0
@@ -64,15 +82,31 @@ See [docs/local-dev.md](docs/local-dev.md) for troubleshooting local environment
   ```bash
   cargo fmt --all
   cargo clippy --workspace --all-targets --all-features -- -D warnings
+  cargo deny check licenses bans
   ```
+  `cargo deny` enforces the license allow-list and banned/duplicate crates from [`deny.toml`](deny.toml). Run it whenever you add or bump a Cargo dependency. One-time install: `cargo install cargo-deny --locked`. CI runs the same `cargo deny check licenses bans` in the "Run Cargo Deny Check" step of [`.github/workflows/audit.yml`](.github/workflows/audit.yml). Use plain `cargo deny check` to also include advisories (needs network access to the RustSec DB).
+- **Dependency graph**: if you add or remove a workspace dependency, regenerate the committed graph (`make dep-graph`) and commit the updated `docs/dep-graph.svg`. Verify it is current with:
+  ```bash
+  npm run check:dep-graph   # regenerates, renders with Graphviz, and diffs against docs/dep-graph.svg
+  ```
+  This check requires Graphviz's `dot` binary; if it is missing the check prints an install hint and exits 0 (non-blocking). See [docs/dep-graph.md](docs/dep-graph.md) for install instructions.
 
 ### Code Formatting & Pre-commit Hooks
 
 Pre-commit hooks are automatically configured via `husky` and `lint-staged` on `npm install`. Before every commit:
+
 - `eslint --fix` runs on staged `.ts`/`.tsx` files.
 - `prettier --write` formats staged `.ts`, `.tsx`, `.json`, `.yaml`, and `.md` files.
 - `tsc --noEmit` checks TypeScript types in `apps/api` and `apps/web`.
+- `rustfmt --check` (via `scripts/rustfmt-staged.sh`, using `rustfmt.toml`) runs on staged `.rs` files only and blocks the commit if they aren't formatted; fix with `cargo fmt --all` and re-stage. It is skipped entirely when no Rust files are staged.
 - `commitlint` validates that commit messages follow Conventional Commits format.
+
+#### Editor Setup & Format-on-Save
+
+To prevent formatting diffs during review, VS Code workspace settings are provided in [`.vscode/settings.json`](.vscode/settings.json). Opening the repository with the recommended extensions ([Prettier](https://marketplace.visualstudio.com/items?itemName=esbenp.prettier-vscode) and [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)) enables automatic format-on-save:
+
+- TypeScript, JavaScript, JSON, YAML, and Markdown format automatically on save using root [`.prettierrc`](.prettierrc).
+- Rust (`.rs`) files automatically format on save using `rustfmt` configured by root [`rustfmt.toml`](rustfmt.toml).
 
 ```bash
 # Manual formatting and lint checks
@@ -98,6 +132,7 @@ npm run watch:contracts
 # or
 make watch-contracts
 ```
+
 The watch command uses `-w src/` to watch crate source files only, avoiding build churn in `target/`. Note for Linux users: ensure system `fs.inotify.max_user_watches` is raised if watching fails on large directory structures.
 
 ### Testing
@@ -107,11 +142,33 @@ The watch command uses `-w src/` to watch crate source files only, avoiding buil
 | Contract unit tests | `cargo test --workspace` (or `npm run contract:test`) |
 | API integration tests | `npm run test:integration --workspace=apps/api` |
 | SDK tests | `npm run test --workspace=packages/sdk` (runs `src/compatibility.test.ts` via `tsx --test`) |
+| Operational scripts | `npm run test:scripts` (runs `scripts/__tests__/*.test.ts` via `tsx --test --test-force-exit`; node-only, no external services) |
 | Happy-path e2e smoke | `npm run e2e` — start the API first (`npm run dev:api`), then run from the repo root. Exits non-zero on any step failure. |
 | Web unit tests | `npm test --workspace=apps/web` (Vitest; `test:watch` and `test:coverage` also available) |
 | End-to-end tests | `npx playwright test` (from `apps/web`; see `apps/web/package.json` `test:e2e`) |
+| Load/benchmark suite | `npm run benchmark` — requires [k6](https://k6.io/docs/get-started/installation/) and a running API; see [Benchmarks](#benchmarks) |
+
+#### Benchmarks
+
+`npm run benchmark` (root) → `npm run benchmark --workspace=apps/api` → `bash tests/load/run-all.sh`. The script runs the five k6 scripts in `apps/api/tests/load/` one after another (see the [load-test README](apps/api/tests/load/README.md) for endpoints and targets).
+
+- **Tool:** [k6](https://k6.io/docs/get-started/installation/). It is **not** installed by npm — install it separately (e.g. `brew install k6`, or use the `grafana/k6` Docker image). `run-all.sh` calls `k6` directly, so it must be on your `PATH`.
+- **Services:** the API must be running and reachable (`npm run dev:api`), backed by Postgres and Redis (`docker compose up -d postgres redis`). Each script's setup registers a fresh importer, which makes real Stellar testnet calls, so the API needs valid Stellar env vars.
+- **Env vars:** `API_BASE_URL` (default `http://localhost:3002`).
+- **Run time:** about 5–6 minutes — five scripts at 50 virtual users for 1 minute each, plus setup.
+- **Passing:** every script's k6 thresholds hold (e.g. `GET /importers` p95 < 200ms, error rate < 0.1%) and `run-all.sh` exits `0`. **Failing:** any threshold breach prints `!!! <script> exceeded its thresholds !!!` and the run exits `1` after all scripts finish. Per-script JSON summaries are written to `apps/api/tests/load/results/` (gitignored).
+
+For how the results relate to multi-instance deployments, see [docs/scaling.md](docs/scaling.md#verifying-under-load).
 
 CI runs the contract, typecheck, and lint suites on every PR — see `.github/workflows/ci.yml` and `.github/workflows/contract.yml`.
+
+**Gap — `npm run test:scripts` is not wired into CI.** No workflow under `.github/workflows/` invokes `test:scripts`, so a change to `scripts/*.ts` is not automatically covered by the operational-scripts suite on a PR. Run `npm run test:scripts` from a fresh clone (after `npm install`; the suite needs no external services) before pushing. Adding a workflow job for it is a tracked follow-up.
+
+#### Operational-scripts test coverage
+
+`scripts/__tests__/` currently covers: `backup-restore-drill` (for `backup-restore-drill.sh`), `check-contract-version`, `list-wasm-hashes`, `migrate-storage`, `rollback-upgrade`, `rotate-admin`, `upgrade`, and `verify-upgrade`. The following `scripts/*.ts` files have **no** corresponding test in `scripts/__tests__/` and should be considered for future coverage:
+
+`admin.ts`, `backup-cleanup-lambda.ts`, `backup-compliance-report-lambda.ts`, `backup-state.ts`, `check-dep-graph.ts`, `dep-graph.ts`, `deploy-contracts.ts`, `e2e.ts`, `ingest-dast-findings.ts`, `sdk-smoke.ts`, `seed.ts`, `setup-env.ts`, `test-regulatory-report.ts`, `upgrade-dry-run.ts`, `verify-dast-findings.ts`.
 
 ### Regenerating API types
 
@@ -131,14 +188,14 @@ All PRs must target the `main` branch. Name your branch by change type, matching
 
 When you open a PR, GitHub will pre-populate the body from [`.github/pull_request_template.md`](.github/pull_request_template.md). Fill in each section:
 
-| Section | Purpose |
-|---------|---------|
-| **Summary** | One paragraph explaining what changed and why. Focus on the motivation, not just what the code does. |
-| **Type of Change** | Tick the appropriate boxes so reviewers understand the scope at a glance. Tick **Breaking change** if existing callers need to update. |
-| **Checklist** | Work through each item before requesting review. If an item does not apply, tick it and add a brief note explaining why. |
-| **Related Issues** | Use `Closes #<number>` to auto-close issues on merge. Multiple issues: `Closes #123, closes #456`. |
-| **Screenshots / Demo** | Required for any PR that changes the Next.js UI. A Loom recording is fine for complex flows. |
-| **Deployment Notes** | List every action required after merge: new env vars, database migrations, contract upgrades, or Render/Vercel manual steps. Leave blank if none. |
+| Section                | Purpose                                                                                                                                           |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Summary**            | One paragraph explaining what changed and why. Focus on the motivation, not just what the code does.                                              |
+| **Type of Change**     | Tick the appropriate boxes so reviewers understand the scope at a glance. Tick **Breaking change** if existing callers need to update.            |
+| **Checklist**          | Work through each item before requesting review. If an item does not apply, tick it and add a brief note explaining why.                          |
+| **Related Issues**     | Use `Closes #<number>` to auto-close issues on merge. Multiple issues: `Closes #123, closes #456`.                                                |
+| **Screenshots / Demo** | Required for any PR that changes the Next.js UI. A Loom recording is fine for complex flows.                                                      |
+| **Deployment Notes**   | List every action required after merge: new env vars, database migrations, contract upgrades, or Render/Vercel manual steps. Leave blank if none. |
 
 ### Review expectations
 
@@ -171,31 +228,31 @@ TariffShield uses [Conventional Commits](https://www.conventionalcommits.org/). 
 
 ### Types
 
-| Type | When to use |
-|------|-------------|
-| `feat` | New feature visible to users or API consumers |
-| `fix` | Bug fix |
-| `docs` | Documentation only |
-| `refactor` | Code change with no behaviour change |
-| `test` | Adding or updating tests |
-| `ci` | Changes to GitHub Actions workflows or CI config |
-| `chore` | Maintenance tasks — dependency bumps, tooling config |
-| `perf` | Performance improvement |
-| `revert` | Reverts a prior commit |
+| Type       | When to use                                          |
+| ---------- | ---------------------------------------------------- |
+| `feat`     | New feature visible to users or API consumers        |
+| `fix`      | Bug fix                                              |
+| `docs`     | Documentation only                                   |
+| `refactor` | Code change with no behaviour change                 |
+| `test`     | Adding or updating tests                             |
+| `ci`       | Changes to GitHub Actions workflows or CI config     |
+| `chore`    | Maintenance tasks — dependency bumps, tooling config |
+| `perf`     | Performance improvement                              |
+| `revert`   | Reverts a prior commit                               |
 
 ### Scopes
 
 Use one of these scopes when the change is specific to a subsystem:
 
-| Scope | Subsystem |
-|-------|-----------|
+| Scope      | Subsystem                                           |
+| ---------- | --------------------------------------------------- |
 | `contract` | Soroban smart contract (`contracts/tariff-shield/`) |
-| `api` | Express API (`apps/api/`) |
-| `web` | Next.js dashboard (`apps/web/`) |
-| `sdk` | TypeScript SDK (`packages/sdk/`) |
-| `ci` | GitHub Actions workflows |
-| `docs` | Documentation in `docs/` |
-| `deps` | Dependency version updates |
+| `api`      | Express API (`apps/api/`)                           |
+| `web`      | Next.js dashboard (`apps/web/`)                     |
+| `sdk`      | TypeScript SDK (`packages/sdk/`)                    |
+| `ci`       | GitHub Actions workflows                            |
+| `docs`     | Documentation in `docs/`                            |
+| `deps`     | Dependency version updates                          |
 
 Omit the scope when the change spans multiple subsystems.
 
@@ -233,11 +290,11 @@ A `BREAKING CHANGE` footer triggers a **major** version bump in the automated re
 
 Releases are automated via [semantic-release](https://semantic-release.gitbook.io/) on every push to `main` (after CI passes). The version bump is determined by the highest-impact commit type since the last release:
 
-| Commit type | Version bump |
-|-------------|-------------|
+| Commit type               | Version bump    |
+| ------------------------- | --------------- |
 | `fix`, `perf`, `refactor` | Patch (`0.1.x`) |
-| `feat` | Minor (`0.x.0`) |
-| `BREAKING CHANGE` footer | Major (`x.0.0`) |
+| `feat`                    | Minor (`0.x.0`) |
+| `BREAKING CHANGE` footer  | Major (`x.0.0`) |
 
 `chore`, `docs`, `ci`, and `test` commits do not trigger a release. `semantic-release` writes the updated version to `package.json` (root and workspaces), appends an entry to [`CHANGELOG.md`](CHANGELOG.md), and creates a GitHub Release with generated release notes.
 

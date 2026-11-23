@@ -92,7 +92,9 @@ jobs:
       - name: Ingest Findings into DB
         env:
           DATABASE_URL: postgres://tariffshield:tariffshield_dev_password@localhost:5443/tariffshield
-        run: npx tsx scripts/ingest-dast-findings.ts
+        # ZAP above writes report.json to the repo root; pass it explicitly so
+        # the dependency on that artifact name is visible here.
+        run: npx tsx scripts/ingest-dast-findings.ts --file report.json
 
       - name: Verify Findings and Fail on High/Critical
         run: npx tsx scripts/verify-dast-findings.ts

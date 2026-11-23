@@ -88,6 +88,100 @@ program
   });
 
 program
+  .command("list-importers")
+  .description("List importers (id, legal name, bond id, Stellar address); read-only")
+  .option("--email <email>", "Only show importers whose user email matches (case-insensitive, substring)")
+  .action(async (options) => {
+    try {
+      // stellar_secret_encrypted is deliberately never selected.
+      const params: string[] = [];
+      let where = "";
+      if (options.email) {
+        params.push(`%${options.email.toLowerCase()}%`);
+        where = "WHERE LOWER(u.email) LIKE $1";
+      }
+      const result = await pool.query(
+        `SELECT i.id, i.legal_name, i.bond_id, i.stellar_address, u.email
+         FROM importers i JOIN users u ON u.id = i.user_id
+         ${where}
+         ORDER BY i.created_at DESC`,
+        params
+      );
+      if (result.rowCount === 0) {
+        console.log("No importers found.");
+        return;
+      }
+      console.table(
+        result.rows.map((r) => ({
+          id: r.id,
+          legal_name: r.legal_name,
+          bond_id: String(r.bond_id),
+          stellar_address: r.stellar_address,
+          email: r.email,
+        }))
+      );
+      console.log(`${result.rowCount} importer(s).`);
+    } catch (e) {
+      console.error("Error listing importers:", e);
+    } finally {
+      await pool.end();
+    }
+  });
+
+program
+  .command("get-importer")
+  .description("Show the full record for one importer, including on-chain balances; read-only")
+  .requiredOption("--id <id>", "Importer UUID")
+  .action(async (options) => {
+    try {
+      // Explicit column list: never select stellar_secret_encrypted.
+      const result = await pool.query(
+        `SELECT i.id, i.user_id, u.email, i.legal_name, i.ein, i.bond_id,
+                i.stellar_address, i.registered_on_chain_tx, i.created_at
+         FROM importers i JOIN users u ON u.id = i.user_id
+         WHERE i.id = $1`,
+        [options.id]
+      );
+      if (result.rowCount === 0) {
+        throw new Error("Importer not found");
+      }
+      const importer = result.rows[0];
+      console.log("Database record:");
+      console.log(JSON.stringify(importer, null, 2));
+
+      // Seeded demo importers use placeholder addresses, so the on-chain
+      // lookup is best-effort.
+      try {
+        const acct = await contractClient.getAccount(importer.stellar_address);
+        console.log("On-chain account:");
+        console.log(
+          JSON.stringify(
+            {
+              bondId: acct.bondId.toString(),
+              collateralBalance: xlm(acct.collateralBalance),
+              requiredCollateral: xlm(acct.requiredCollateral),
+              reserveBalance: xlm(acct.reserveBalance),
+              yieldAccrued: xlm(acct.yieldAccrued),
+              isClawbacked: acct.isClawbacked,
+            },
+            null,
+            2
+          )
+        );
+      } catch (err) {
+        console.log(
+          `On-chain account: unavailable (${(err as Error).message}). ` +
+            `The importer may be a DB-only demo record that is not registered on-chain.`
+        );
+      }
+    } catch (e) {
+      console.error("Error getting importer:", e);
+    } finally {
+      await pool.end();
+    }
+  });
+
+program
   .command("set-required")
   .description("Update the bond requirement for an importer")
   .requiredOption("--importer-id <id>", "Importer UUID")

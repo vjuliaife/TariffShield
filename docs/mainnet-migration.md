@@ -49,6 +49,25 @@ Execute the deployment in this explicit order:
 5. **Verify Entrypoints:** Run read-only smoke tests (like `scripts/sdk-smoke.ts` adapted for mainnet) against the contract.
 6. **Communicate to Users:** Open the platform for user interaction.
 
+### Storage migration review (v0_1_0 → v0_2_0)
+
+Existing v0_1_0 importer accounts are re-persisted under v0_2_0 through the contract's `migrate_account` entrypoint. `scripts/migrate-storage.ts` walks every importer with a `stellar_address` in Postgres and submits the migration per account. Review the plan before running it live:
+
+```bash
+# 1. Read-only plan against the configured deployment (no transactions submitted)
+npx tsx scripts/migrate-storage.ts --dry-run
+
+# 2. Plan against the local docker-compose Postgres + demo importers from `npm run seed`
+#    (no deployments.json or deployed contract required)
+docker compose up -d postgres && npm run seed
+npx tsx scripts/migrate-storage.ts --dry-run --offline
+
+# 3. Live run once the plan looks right (requires PLATFORM_SECRET)
+npx tsx scripts/migrate-storage.ts
+```
+
+Both dry-run modes print the per-account `oldValues`/`newValues` diff and write a MigrationLog JSON file under `migration-logs/`; they exit 0 only when every account passed validation. `--offline` derives the demo account state from local seed data, so it is for reviewing the migration logic only — use step 1 for the real plan.
+
 ## 7. User Communication Plan Template
 Notify importers 7 days prior to migration.
 

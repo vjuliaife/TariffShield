@@ -13,6 +13,7 @@ Operational procedures for surety admins and platform operators. Covers the emer
 5. [Dispute window and importer appeals](#5-dispute-window-and-importer-appeals)
 6. [Rollback considerations](#6-rollback-considerations)
 7. [Escalation contacts](#7-escalation-contacts)
+8. [Backup Lambda local invocation and maintenance](#8-backup-lambda-local-invocation-and-maintenance)
 
 ---
 
@@ -20,26 +21,30 @@ Operational procedures for surety admins and platform operators. Covers the emer
 
 ### Required credentials
 
-| Credential | Where stored | Used for |
-|---|---|---|
-| Surety admin JWT | Issued at `POST /auth/login` | API authentication |
-| Surety Stellar keypair | Env var `SURETY_SECRET_KEY` | Signs on-chain transactions |
-| Platform admin API key | Env var `PLATFORM_ADMIN_KEY` | Unlocking frozen operations |
-| NAIC license number | `surety_license_verifications` table | License check gate on clawback endpoint |
+| Credential             | Where stored                         | Used for                                |
+| ---------------------- | ------------------------------------ | --------------------------------------- |
+| Surety admin JWT       | Issued at `POST /auth/login`         | API authentication                      |
+| Surety Stellar keypair | Env var `SURETY_SECRET_KEY`          | Signs on-chain transactions             |
+| Platform admin API key | Env var `PLATFORM_ADMIN_KEY`         | Unlocking frozen operations             |
+| NAIC license number    | `surety_license_verifications` table | License check gate on clawback endpoint |
 
 ### Pre-flight checks before any clawback
 
 1. Confirm your `surety_license_verifications.status` is `verified`:
+
    ```
    GET /surety-license/status
    Authorization: Bearer <your-jwt>
    ```
+
    Expected: `{ "status": "verified", ... }`
 
 2. Confirm the Soroban RPC is reachable:
+
    ```
    GET /health/ready
    ```
+
    Expected: `200` with body `{ "status": "ok" }`
 
 3. Pull live collateral status for the target importer:
@@ -68,6 +73,7 @@ Invoke clawback only when **all three** conditions are met:
 **Step 1 — Log the initiating event**
 
 Before calling the API, record in your internal incident system:
+
 - Importer legal name and ID
 - Bond ID and current required collateral
 - Reason for clawback (paste verbatim from CBP notice or credit committee decision)
@@ -104,6 +110,7 @@ Expected success response:
 **Step 4 — Verify on-chain state**
 
 Open the `explorerUrl` from the response in a browser and confirm:
+
 - Transaction status: `SUCCESS`
 - Operation type: `invoke_host_function`
 - The surety wallet received the full collateral + reserve amount
@@ -225,13 +232,56 @@ See `scripts/rollback-upgrade.ts` for emergency rollback to the previous WASM ha
 
 ## 7. Escalation contacts
 
-| Role | Contact | When to escalate |
-|---|---|---|
-| Platform engineering on-call | File a GitHub issue tagged `P0` on [vjuliaife/TariffShield](https://github.com/vjuliaife/TariffShield) | API errors, contract call failures, RPC outages |
-| Legal counsel | Per your surety's standard legal escalation path | Any dispute raised by importer; any clawback that may be challenged |
-| CBP bond management | ACE portal or `bond-forfeiture@cbp.dhs.gov` | After every clawback, to update bond status with CBP |
-| Stellar network status | [dashboard.stellar.org](https://dashboard.stellar.org) | Transactions failing at network level |
+| Role                         | Contact                                                                                                | When to escalate                                                    |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------- |
+| Platform engineering on-call | File a GitHub issue tagged `P0` on [vjuliaife/TariffShield](https://github.com/vjuliaife/TariffShield) | API errors, contract call failures, RPC outages                     |
+| Legal counsel                | Per your surety's standard legal escalation path                                                       | Any dispute raised by importer; any clawback that may be challenged |
+| CBP bond management          | ACE portal or `bond-forfeiture@cbp.dhs.gov`                                                            | After every clawback, to update bond status with CBP                |
+| Stellar network status       | [dashboard.stellar.org](https://dashboard.stellar.org)                                                 | Transactions failing at network level                               |
 
 ---
 
-*Last reviewed: 2026-06-27. Review this runbook whenever the contract is upgraded or the dispute window is changed.*
+## 8. Backup Lambda local invocation and maintenance
+
+TariffShield deploys two scheduled AWS Lambda maintenance jobs located in `scripts/`:
+
+- [`scripts/backup-cleanup-lambda.ts`](../scripts/backup-cleanup-lambda.ts): Enforces RDS snapshot retention policies (7-day daily, 28-day weekly, 365-day monthly), pruning expired snapshots and logging audit records to DynamoDB.
+- [`scripts/backup-compliance-report-lambda.ts`](../scripts/backup-compliance-report-lambda.ts): Aggregates snapshot evidence, S3 exports, and deletion audits into a monthly compliance JSON report uploaded to S3.
+
+### Local testing without AWS SAM or credentials
+
+Contributors can invoke and verify both handlers locally without AWS SAM/CDK tooling and without active AWS credentials via the local invoke harness:
+
+```bash
+# Dry-run smoke test for backup cleanup (uses built-in mocks):
+npx tsx scripts/lib/invoke-lambda-local.ts cleanup --dry-run
+
+# Dry-run smoke test for monthly compliance report:
+npx tsx scripts/lib/invoke-lambda-local.ts compliance-report --dry-run
+```
+
+In `--dry-run` mode, `scripts/lib/invoke-lambda-local.ts` supplies synthetic RDS snapshots, S3 objects, and DynamoDB items, mocks the AWS SDK client calls in-process, and outputs the handler results and recorded state transitions without contacting AWS.
+
+### Live test (requires AWS credentials)
+
+To invoke against real development or staging AWS resources:
+
+```bash
+export AWS_REGION=us-east-1
+export AWS_ACCESS_KEY_ID=<your-key>
+export AWS_SECRET_ACCESS_KEY=<your-secret>
+
+npx tsx scripts/lib/invoke-lambda-local.ts cleanup --live
+```
+
+### Automated regression tests
+
+Run the test suite covering both Lambda handlers:
+
+```bash
+npx tsx --test scripts/__tests__/invoke-lambda-local.test.ts
+```
+
+---
+
+_Last reviewed: 2026-06-27. Review this runbook whenever the contract is upgraded or the dispute window is changed._

@@ -9,6 +9,7 @@ import { getUser, isAuthenticated } from '@/lib/auth';
 import { NpsTrendWidget } from '@/components/NpsTrendWidget';
 import { ReportTemplateEditor } from '@/components/ReportTemplateEditor';
 import { CoSuretyExposureWidget } from '@/components/CoSuretyExposureWidget';
+import { BrandingEditor } from '@/components/BrandingEditor';
 
 export default function SuretyDashboard() {
   const router = useRouter();

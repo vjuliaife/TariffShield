@@ -11,6 +11,15 @@ Before starting, ensure you have the following configured and running:
 2. **Stellar Testnet Account**: A funded Stellar Testnet account to pay for transaction fees (the tutorial will show how to fund newly generated keys via Friendbot).
 3. **Soroban Contract ID**: The contract must be deployed on Stellar Testnet, and its Contract ID (e.g., `CBLASRVG7NRAFP2CDPVSF4WTJBKC6L4FKT2XHR3OH7CLICUBPVQ4PBBF`) must be known.
 4. **TariffShield API**: The backend Express orchestrator must be running locally (`http://localhost:3002`) or deployed on Render.
+5. **Built SDK (when working inside this repo)**: `packages/sdk/package.json` sets `"main": "./dist/index.js"`, and `npm install` does not build it. On a fresh clone, run this before using the SDK by its package name (`@tariffshield/sdk`):
+
+   ```bash
+   npm run build --workspace=packages/sdk
+   ```
+
+   Without it, scripts such as `scripts/check-contract-version.ts` fail with a module-not-found error for `@tariffshield/sdk`. Rebuild after changing anything in `packages/sdk/src`.
+
+   > **Which import pattern should new scripts use?** The in-repo scripts are inconsistent: `scripts/check-contract-version.ts` imports the built package (`@tariffshield/sdk`, needs the build above), while `scripts/migrate-storage.ts`, `scripts/backup-state.ts` and `scripts/sdk-smoke.ts` import the source directly (`../packages/sdk/src/index.js`) and work without a build. For new scripts, prefer the source import so they run on a fresh clone; use the package name only if you are testing the published/built artifact.
 
 ---
 
@@ -21,6 +30,8 @@ First, install the TariffShield SDK and the underlying Stellar SDK:
 ```bash
 npm install @tariff-shield/sdk @stellar/stellar-sdk
 ```
+
+To check that the SDK can reach the deployed testnet contract from `deployments.json`, run the read-only smoke test from the repo root: `npm run sdk-smoke`.
 
 Now, instantiate the `TariffShieldClient`. The client manages RPC connections, transaction building, simulation, and submission.
 

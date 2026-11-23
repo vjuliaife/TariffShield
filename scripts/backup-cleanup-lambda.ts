@@ -1,10 +1,24 @@
-import { RDSClient, DescribeDBSnapshotsCommand, DeleteDBSnapshotCommand } from "@aws-sdk/client-rds";
-import { DynamoDBClient, PutItemCommand } from "@aws-sdk/client-dynamodb";
-import { CloudTrailClient, LookupEventsCommand } from "@aws-sdk/client-cloudtrail";
+/**
+ * AWS Lambda handler for automated RDS backup snapshot cleanup and retention enforcement.
+ *
+ * Local invocation (smoke test without AWS credentials):
+ *   npx tsx scripts/lib/invoke-lambda-local.ts cleanup --dry-run
+ *
+ * Live invocation (requires AWS credentials):
+ *   npx tsx scripts/lib/invoke-lambda-local.ts cleanup --live
+ */
 
-const rds = new RDSClient({ region: process.env.AWS_REGION || "us-east-1" });
-const dynamodb = new DynamoDBClient({ region: process.env.AWS_REGION || "us-east-1" });
-const cloudtrail = new CloudTrailClient({ region: process.env.AWS_REGION || "us-east-1" });
+import {
+  RDSClient,
+  DescribeDBSnapshotsCommand,
+  DeleteDBSnapshotCommand,
+} from '@aws-sdk/client-rds';
+import { DynamoDBClient, PutItemCommand } from '@aws-sdk/client-dynamodb';
+import { CloudTrailClient, LookupEventsCommand } from '@aws-sdk/client-cloudtrail';
+
+const rds = new RDSClient({ region: process.env.AWS_REGION || 'us-east-1' });
+const dynamodb = new DynamoDBClient({ region: process.env.AWS_REGION || 'us-east-1' });
+const cloudtrail = new CloudTrailClient({ region: process.env.AWS_REGION || 'us-east-1' });
 
 interface SnapshotPolicy {
   pattern: RegExp;
@@ -30,8 +44,8 @@ async function getExpiredSnapshots(): Promise<SnapshotToDelete[]> {
     new DescribeDBSnapshotsCommand({
       Filters: [
         {
-          Name: "engine",
-          Values: ["postgres"],
+          Name: 'engine',
+          Values: ['postgres'],
         },
       ],
     })
@@ -46,7 +60,9 @@ async function getExpiredSnapshots(): Promise<SnapshotToDelete[]> {
 
     const policy = SNAPSHOT_POLICIES.find((p) => p.pattern.test(snapshot.DBSnapshotIdentifier));
     if (!policy) {
-      console.log(`[INFO] Snapshot ${snapshot.DBSnapshotIdentifier} does not match any retention policy, skipping`);
+      console.log(
+        `[INFO] Snapshot ${snapshot.DBSnapshotIdentifier} does not match any retention policy, skipping`
+      );
       continue;
     }
 
@@ -58,7 +74,7 @@ async function getExpiredSnapshots(): Promise<SnapshotToDelete[]> {
         DBSnapshotIdentifier: snapshot.DBSnapshotIdentifier,
         CreateTime: snapshot.CreateTime,
         StorageEncrypted: snapshot.StorageEncrypted,
-        KmsKeyId: snapshot.KmsKeyId || "unknown",
+        KmsKeyId: snapshot.KmsKeyId || 'unknown',
       });
     }
   }
@@ -84,14 +100,18 @@ async function logDeletionEvent(snapshot: SnapshotToDelete): Promise<void> {
 
   await dynamodb.send(
     new PutItemCommand({
-      TableName: process.env.AUDIT_TABLE_NAME || "backup-deletion-events",
+      TableName: process.env.AUDIT_TABLE_NAME || 'backup-deletion-events',
       Item: {
         event_id: { S: `${snapshot.DBSnapshotIdentifier}-${now.getTime()}` },
         resource_id: { S: snapshot.DBSnapshotIdentifier },
-        resource_type: { S: "rds-snapshot" },
+        resource_type: { S: 'rds-snapshot' },
         deleted_at: { S: now.toISOString() },
-        deleted_by_role: { S: process.env.AWS_EXECUTION_ROLE_ARN || "unknown" },
-        snapshot_age_days: { N: String(Math.floor((now.getTime() - snapshot.CreateTime.getTime()) / (1000 * 60 * 60 * 24))) },
+        deleted_by_role: { S: process.env.AWS_EXECUTION_ROLE_ARN || 'unknown' },
+        snapshot_age_days: {
+          N: String(
+            Math.floor((now.getTime() - snapshot.CreateTime.getTime()) / (1000 * 60 * 60 * 24))
+          ),
+        },
         encrypted: { BOOL: snapshot.StorageEncrypted },
         kms_key_id: { S: snapshot.KmsKeyId },
       },
@@ -99,8 +119,11 @@ async function logDeletionEvent(snapshot: SnapshotToDelete): Promise<void> {
   );
 }
 
-export async function handler(): Promise<{ deletedCount: number; errors: string[] }> {
-  console.log("[INFO] Starting backup cleanup process...");
+export async function handler(
+  event?: any,
+  context?: any
+): Promise<{ deletedCount: number; errors: string[] }> {
+  console.log('[INFO] Starting backup cleanup process...');
 
   try {
     const expired = await getExpiredSnapshots();
@@ -121,14 +144,16 @@ export async function handler(): Promise<{ deletedCount: number; errors: string[
       }
     }
 
-    console.log(`[INFO] Backup cleanup completed: ${deletedCount} snapshots deleted, ${errors.length} errors`);
+    console.log(
+      `[INFO] Backup cleanup completed: ${deletedCount} snapshots deleted, ${errors.length} errors`
+    );
 
     return {
       deletedCount,
       errors,
     };
   } catch (err) {
-    console.error("[ERROR] Backup cleanup failed:", err);
+    console.error('[ERROR] Backup cleanup failed:', err);
     throw err;
   }
 }

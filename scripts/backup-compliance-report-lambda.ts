@@ -1,10 +1,20 @@
-import { RDSClient, DescribeDBSnapshotsCommand } from "@aws-sdk/client-rds";
-import { S3Client, ListObjectsV2Command, PutObjectCommand } from "@aws-sdk/client-s3";
-import { DynamoDBClient, QueryCommand } from "@aws-sdk/client-dynamodb";
+/**
+ * AWS Lambda handler for monthly backup compliance reporting and evidence aggregation.
+ *
+ * Local invocation (smoke test without AWS credentials):
+ *   npx tsx scripts/lib/invoke-lambda-local.ts compliance-report --dry-run
+ *
+ * Live invocation (requires AWS credentials):
+ *   npx tsx scripts/lib/invoke-lambda-local.ts compliance-report --live
+ */
 
-const rds = new RDSClient({ region: process.env.AWS_REGION || "us-east-1" });
-const s3 = new S3Client({ region: process.env.AWS_REGION || "us-east-1" });
-const dynamodb = new DynamoDBClient({ region: process.env.AWS_REGION || "us-east-1" });
+import { RDSClient, DescribeDBSnapshotsCommand } from '@aws-sdk/client-rds';
+import { S3Client, ListObjectsV2Command, PutObjectCommand } from '@aws-sdk/client-s3';
+import { DynamoDBClient, QueryCommand } from '@aws-sdk/client-dynamodb';
+
+const rds = new RDSClient({ region: process.env.AWS_REGION || 'us-east-1' });
+const s3 = new S3Client({ region: process.env.AWS_REGION || 'us-east-1' });
+const dynamodb = new DynamoDBClient({ region: process.env.AWS_REGION || 'us-east-1' });
 
 interface BackupEvidence {
   report_date: string;
@@ -44,14 +54,14 @@ interface BackupEvidence {
   };
 }
 
-async function getRdsSnapshots(): Promise<BackupEvidence["rds_snapshots"]> {
+async function getRdsSnapshots(): Promise<BackupEvidence['rds_snapshots']> {
   const now = new Date();
   const result = await rds.send(
     new DescribeDBSnapshotsCommand({
       Filters: [
         {
-          Name: "engine",
-          Values: ["postgres"],
+          Name: 'engine',
+          Values: ['postgres'],
         },
       ],
     })
@@ -59,11 +69,16 @@ async function getRdsSnapshots(): Promise<BackupEvidence["rds_snapshots"]> {
 
   const snapshots = result.DBSnapshots || [];
   const encrypted = snapshots.filter((s) => s.StorageEncrypted);
-  const sorted = snapshots.sort((a, b) => (b.CreateTime?.getTime() || 0) - (a.CreateTime?.getTime() || 0));
+  const sorted = snapshots.sort(
+    (a, b) => (b.CreateTime?.getTime() || 0) - (a.CreateTime?.getTime() || 0)
+  );
 
-  const kmsKeyId = encrypted.length > 0 ? encrypted[0].KmsKeyId || "unknown" : "no-snapshots";
+  const kmsKeyId = encrypted.length > 0 ? encrypted[0].KmsKeyId || 'unknown' : 'no-snapshots';
   const oldestSnapshot = sorted[0];
-  const oldestAgeDays = oldestSnapshot && oldestSnapshot.CreateTime ? Math.floor((now.getTime() - oldestSnapshot.CreateTime.getTime()) / (1000 * 60 * 60 * 24)) : 0;
+  const oldestAgeDays =
+    oldestSnapshot && oldestSnapshot.CreateTime
+      ? Math.floor((now.getTime() - oldestSnapshot.CreateTime.getTime()) / (1000 * 60 * 60 * 24))
+      : 0;
 
   return {
     total_count: snapshots.length,
@@ -71,62 +86,67 @@ async function getRdsSnapshots(): Promise<BackupEvidence["rds_snapshots"]> {
     all_encrypted: encrypted.length === snapshots.length && snapshots.length > 0,
     kms_key_id: kmsKeyId,
     snapshots: snapshots.map((snap) => ({
-      id: `rds:${snap.DBSnapshotIdentifier || "unknown"}`,
-      created_at: snap.CreateTime?.toISOString() || "unknown",
+      id: `rds:${snap.DBSnapshotIdentifier || 'unknown'}`,
+      created_at: snap.CreateTime?.toISOString() || 'unknown',
       encrypted: snap.StorageEncrypted || false,
       size_gb: snap.AllocatedStorage || 0,
     })),
   };
 }
 
-async function getS3Exports(): Promise<BackupEvidence["s3_exports"]> {
+async function getS3Exports(): Promise<BackupEvidence['s3_exports']> {
   const now = new Date();
-  const bucket = process.env.BACKUP_BUCKET || "tariffshield-dr-exports";
+  const bucket = process.env.BACKUP_BUCKET || 'tariffshield-dr-exports';
 
   const result = await s3.send(
     new ListObjectsV2Command({
       Bucket: bucket,
-      Prefix: "exports/",
+      Prefix: 'exports/',
     })
   );
 
-  const exports = (result.Contents || []).sort((a, b) => (b.LastModified?.getTime() || 0) - (a.LastModified?.getTime() || 0));
+  const exports = (result.Contents || []).sort(
+    (a, b) => (b.LastModified?.getTime() || 0) - (a.LastModified?.getTime() || 0)
+  );
 
   const oldestExport = exports[0];
-  const oldestAgeDays = oldestExport && oldestExport.LastModified ? Math.floor((now.getTime() - oldestExport.LastModified.getTime()) / (1000 * 60 * 60 * 24)) : 0;
+  const oldestAgeDays =
+    oldestExport && oldestExport.LastModified
+      ? Math.floor((now.getTime() - oldestExport.LastModified.getTime()) / (1000 * 60 * 60 * 24))
+      : 0;
 
   return {
     total_count: exports.length,
     oldest_age_days: oldestAgeDays,
     all_encrypted: true,
     exports: exports.map((exp) => ({
-      key: exp.Key || "unknown",
-      created_at: exp.LastModified?.toISOString() || "unknown",
+      key: exp.Key || 'unknown',
+      created_at: exp.LastModified?.toISOString() || 'unknown',
       size_bytes: exp.Size || 0,
-      encryption: "AES-256-GCM",
+      encryption: 'AES-256-GCM',
     })),
   };
 }
 
-async function getDeletionEvents(): Promise<BackupEvidence["deletion_events"]> {
+async function getDeletionEvents(): Promise<BackupEvidence['deletion_events']> {
   const thirtyDaysAgo = new Date();
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
   const result = await dynamodb.send(
     new QueryCommand({
-      TableName: process.env.AUDIT_TABLE_NAME || "backup-deletion-events",
-      IndexName: "deleted_at-index",
-      KeyConditionExpression: "deleted_at > :start_date",
+      TableName: process.env.AUDIT_TABLE_NAME || 'backup-deletion-events',
+      IndexName: 'deleted_at-index',
+      KeyConditionExpression: 'deleted_at > :start_date',
       ExpressionAttributeValues: {
-        ":start_date": { S: thirtyDaysAgo.toISOString() },
+        ':start_date': { S: thirtyDaysAgo.toISOString() },
       },
     })
   );
 
   const events = result.Items || [];
   const sortedEvents = events.sort((a, b) => {
-    const timeA = a.deleted_at?.S || "";
-    const timeB = b.deleted_at?.S || "";
+    const timeA = a.deleted_at?.S || '';
+    const timeB = b.deleted_at?.S || '';
     return timeB.localeCompare(timeA);
   });
 
@@ -136,17 +156,20 @@ async function getDeletionEvents(): Promise<BackupEvidence["deletion_events"]> {
     last_30_days: events.length,
     last_event: lastEvent,
     events: sortedEvents.map((evt) => ({
-      resource: evt.resource_id?.S || "unknown",
-      type: evt.resource_type?.S || "unknown",
-      deleted_at: evt.deleted_at?.S || "unknown",
-      deleted_by_role: evt.deleted_by_role?.S || "unknown",
-      cloudtrail_event_id: evt.cloudtrail_event_id?.S || "unknown",
+      resource: evt.resource_id?.S || 'unknown',
+      type: evt.resource_type?.S || 'unknown',
+      deleted_at: evt.deleted_at?.S || 'unknown',
+      deleted_by_role: evt.deleted_by_role?.S || 'unknown',
+      cloudtrail_event_id: evt.cloudtrail_event_id?.S || 'unknown',
     })),
   };
 }
 
-export async function handler(): Promise<{ reportKey: string; status: string }> {
-  console.log("[INFO] Generating monthly backup compliance report...");
+export async function handler(
+  event?: any,
+  context?: any
+): Promise<{ reportKey: string; status: string }> {
+  console.log('[INFO] Generating monthly backup compliance report...');
 
   try {
     const rdsSnaps = await getRdsSnapshots();
@@ -154,7 +177,7 @@ export async function handler(): Promise<{ reportKey: string; status: string }> 
     const deletionEvts = await getDeletionEvents();
 
     const evidence: BackupEvidence = {
-      report_date: new Date().toISOString().split("T")[0],
+      report_date: new Date().toISOString().split('T')[0],
       rds_snapshots: rdsSnaps,
       s3_exports: s3Exports,
       deletion_events: deletionEvts,
@@ -164,26 +187,28 @@ export async function handler(): Promise<{ reportKey: string; status: string }> 
 
     await s3.send(
       new PutObjectCommand({
-        Bucket: process.env.COMPLIANCE_BUCKET || "tariffshield-compliance",
+        Bucket: process.env.COMPLIANCE_BUCKET || 'tariffshield-compliance',
         Key: reportKey,
-        ContentType: "application/json",
+        ContentType: 'application/json',
         Body: JSON.stringify(evidence, null, 2),
-        ServerSideEncryption: "aws:kms",
+        ServerSideEncryption: 'aws:kms',
         SSEKMSKeyId: process.env.KMS_KEY_ID,
       })
     );
 
     console.log(`[INFO] Report uploaded to s3://${process.env.COMPLIANCE_BUCKET}/${reportKey}`);
-    console.log(`[INFO] RDS snapshots: ${rdsSnaps.total_count} total, ${rdsSnaps.all_encrypted ? "all encrypted" : "UNENCRYPTED FOUND"}`);
+    console.log(
+      `[INFO] RDS snapshots: ${rdsSnaps.total_count} total, ${rdsSnaps.all_encrypted ? 'all encrypted' : 'UNENCRYPTED FOUND'}`
+    );
     console.log(`[INFO] S3 exports: ${s3Exports.total_count} total`);
     console.log(`[INFO] Deletion events (30 days): ${deletionEvts.last_30_days}`);
 
     return {
       reportKey,
-      status: "success",
+      status: 'success',
     };
   } catch (err) {
-    console.error("[ERROR] Failed to generate compliance report:", err);
+    console.error('[ERROR] Failed to generate compliance report:', err);
     throw err;
   }
 }
