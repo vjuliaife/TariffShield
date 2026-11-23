@@ -1,15 +1,74 @@
+/**
+ * scripts/ingest-dast-findings.ts
+ *
+ * Ingests an OWASP ZAP JSON report into the `security_findings` table.
+ *
+ * Usage:
+ *   npx tsx scripts/ingest-dast-findings.ts
+ *   npx tsx scripts/ingest-dast-findings.ts --file path/to/zap-report.json
+ *   npx tsx scripts/ingest-dast-findings.ts path/to/zap-report.json   # positional form
+ *
+ * Flags:
+ *   --file <path>  Path to the ZAP JSON report, relative to the current working
+ *                  directory (defaults to report.json in cwd, matching CI).
+ *
+ * Environment:
+ *   DATABASE_URL   Postgres connection string (defaults to the docker-compose
+ *                  local database on localhost:5443).
+ *
+ * Requires the local Postgres from docker-compose to be running, e.g.
+ * `docker compose up -d postgres`.
+ */
+
 import * as fs from "fs";
 import * as path from "path";
 import pg from "pg";
 
 const { Pool } = pg;
 
+const DEFAULT_REPORT_FILE = "report.json";
+
 const databaseUrl = process.env.DATABASE_URL || "postgres://tariffshield:tariffshield_dev_password@localhost:5443/tariffshield";
 
+/**
+ * Resolves the report path from CLI arguments. Accepts `--file <path>`,
+ * `--file=<path>`, or a bare positional `<path>`. Paths are resolved against
+ * the current working directory; when nothing is passed, falls back to
+ * report.json in cwd so existing CI invocations keep working.
+ */
+function resolveReportPath(argv: string[]): string {
+  let fileArg: string | undefined;
+
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "--file") {
+      fileArg = argv[i + 1];
+      if (!fileArg) {
+        console.error("Missing value for --file <path>");
+        process.exit(1);
+      }
+      i++;
+    } else if (arg.startsWith("--file=")) {
+      fileArg = arg.slice("--file=".length);
+    } else if (!arg.startsWith("-") && fileArg === undefined) {
+      fileArg = arg;
+    }
+  }
+
+  if (!fileArg) {
+    fileArg = DEFAULT_REPORT_FILE;
+  }
+
+  return path.resolve(process.cwd(), fileArg);
+}
+
 async function main() {
-  const reportPath = path.resolve(process.cwd(), "report.json");
+  const reportPath = resolveReportPath(process.argv.slice(2));
   if (!fs.existsSync(reportPath)) {
-    console.error("No report.json found at", reportPath);
+    console.error(`No DAST report found at ${reportPath}`);
+    console.error(
+      "Pass --file <path> to point at a different ZAP JSON report (default: report.json in cwd)."
+    );
     process.exit(1);
   }
 

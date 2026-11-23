@@ -16,8 +16,16 @@ next-env.d.ts
 .env.*.local
 deployments.json
 .vercel
-.vscode
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
 .idea
+
+# Local DAST scan output (scripts/ingest-dast-findings.ts) — never commit a stray run artifact
+report.json
+
+# Migration run logs written by scripts/migrate-storage.ts (including --dry-run)
+migration-logs/
 
 # Test snapshots
 __snapshots__/

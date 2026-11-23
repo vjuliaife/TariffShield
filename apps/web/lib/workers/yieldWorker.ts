@@ -20,7 +20,7 @@ import type { YieldProjectionRequest, YieldProjectionResponse } from './yieldWor
  * truth for actual settlement, consistent with the rest of the dashboard's
  * "sim BENJI" framing.
  */
-function projectYield(input: YieldProjectionRequest): YieldProjectionResponse {
+export function projectYield(input: YieldProjectionRequest): YieldProjectionResponse {
   const { currentBalanceStroops, monthlyTopUpStroops, months, annualYieldBps } = input;
 
   if (months <= 0 || months > 600) {
@@ -56,6 +56,7 @@ function projectYield(input: YieldProjectionRequest): YieldProjectionResponse {
   };
 }
 
+if (typeof self !== 'undefined') {
 self.onmessage = (event: MessageEvent<YieldProjectionRequest>) => {
   try {
     const result = projectYield(event.data);
@@ -67,3 +68,5 @@ self.onmessage = (event: MessageEvent<YieldProjectionRequest>) => {
     } satisfies { ok: false; error: string });
   }
 };
+
+}

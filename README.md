@@ -57,7 +57,8 @@ tariffshield/
 │   ├── verify-upgrade.ts           Post-upgrade verification suite
 │   ├── rollback-upgrade.ts         Emergency rollback to previous wasm hash
 │   ├── list-wasm-hashes.ts         Deployment history query tool
-│   └── dep-graph.ts                Monorepo dependency graph generator
+│   ├── dep-graph.ts                Monorepo dependency graph generator
+│   └── ...                         Full index: ARCHITECTURE.md#12-scripts--tooling
 ├── docker-compose.yml              Postgres on :5443
 ├── deployments.json                Contract ID + addresses + verification tx hashes
 ├── docs/dep-graph.md               Package dependency visualization
@@ -146,8 +147,9 @@ npm install
 # 3. Local Postgres
 docker compose up -d
 
-# 4. Configure env
-cp .env.example .env
+# 4. Configure env (root .env.example is generated from apps/api/.env.example — the
+#    single source of truth. Edit the API file, then `npm run sync:env-example`.)
+cp .env.example .env                 # read by repo-root scripts (seed, admin, ...)
 cp .env apps/api/.env                # API reads from apps/api/.env
 cp apps/web/.env.example apps/web/.env.local
 

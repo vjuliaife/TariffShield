@@ -37,4 +37,7 @@ jobs:
           # advisories transitively pulled in by soroban-env-host's ark-* crypto stack
           # with "No safe upgrade available" upstream; see deny.toml for the same
           # documented exception.
-          cargo audit -D warnings --ignore RUSTSEC-2024-0388 --ignore RUSTSEC-2024-0436
+          # RUSTSEC-2026-0387 (crypto-bigint timing variability) is the same situation: the
+          # fix needs crypto-bigint >= 0.7.6 but the soroban-env-host stack pins ^0.5, and the
+          # crate is only built for the host (not the wasm contract); see deny.toml.
+          cargo audit -D warnings --ignore RUSTSEC-2024-0388 --ignore RUSTSEC-2024-0436 --ignore RUSTSEC-2026-0387

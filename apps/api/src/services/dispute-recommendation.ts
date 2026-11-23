@@ -219,7 +219,7 @@ function pastDisputesFactor(accepted: number, rejected: number): RecommendationF
     return {
       key: 'past_disputes',
       label: 'Past dispute outcomes',
-      detail: `${rejected} prior dispute(s) were resolved in the importer\'s favour — precedent weighs against enforcing this increase.`,
+      detail: `${rejected} prior dispute(s) were resolved in the importer's favour — precedent weighs against enforcing this increase.`,
       direction: 'reject',
       weight: -1,
     };
@@ -227,7 +227,7 @@ function pastDisputesFactor(accepted: number, rejected: number): RecommendationF
   return {
     key: 'past_disputes',
     label: 'Past dispute outcomes',
-    detail: `${accepted} prior dispute(s) upheld the surety\'s requirement — precedent supports accepting.`,
+    detail: `${accepted} prior dispute(s) upheld the surety's requirement — precedent supports accepting.`,
     direction: 'accept',
     weight: 1,
   };

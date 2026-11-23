@@ -15,6 +15,8 @@ import { Keypair } from '@stellar/stellar-sdk';
 import {
   getNativeBalance,
   rotateAdmin,
+  parseArgs,
+  resolveShowSecret,
   updateRenderSecret,
   updateVercelSecret,
 } from '../rotate-admin.js';
@@ -235,5 +237,37 @@ describe('updateVercelSecret', () => {
     await updateVercelSecret('SNEWSECRET', 'tariffshield-web');
 
     assert.equal(fetchMock.mock.callCount(), 3);
+  });
+});
+
+describe('--show-secret confirmation gate', () => {
+  const never = async () => {
+    throw new Error('prompt should not be called');
+  };
+
+  it('parseArgs recognises --yes and -y, defaulting to false', () => {
+    assert.equal(parseArgs(['--show-secret']).yes, false);
+    assert.equal(parseArgs(['--show-secret', '--yes']).yes, true);
+    assert.equal(parseArgs(['--show-secret', '-y']).yes, true);
+  });
+
+  it('skips the prompt and allows printing when --yes is given', async () => {
+    assert.equal(await resolveShowSecret({ yes: true, isTTY: false, prompt: never }), true);
+  });
+
+  it('refuses without prompting when there is no TTY and no --yes', async () => {
+    assert.equal(await resolveShowSecret({ yes: false, isTTY: false, prompt: never }), false);
+  });
+
+  it('allows printing on an affirmative answer in a TTY', async () => {
+    for (const answer of ['yes', ' YES ', 'y']) {
+      assert.equal(await resolveShowSecret({ yes: false, isTTY: true, prompt: async () => answer }), true);
+    }
+  });
+
+  it('aborts on any other answer in a TTY', async () => {
+    for (const answer of ['', 'no', 'maybe']) {
+      assert.equal(await resolveShowSecret({ yes: false, isTTY: true, prompt: async () => answer }), false);
+    }
   });
 });

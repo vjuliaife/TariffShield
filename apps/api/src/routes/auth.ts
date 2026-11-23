@@ -618,6 +618,12 @@ authRouter.post('/team-invite/accept', async (req: Request, res: Response) => {
         status: 'active',
       },
     });
+  } catch (err: any) {
+    console.error('[auth] failed to accept team invite:', err);
+    res.status(500).json({ error: 'failed to accept team invite' });
+  }
+});
+
 // ── #1014: TOTP MFA Management & Helper Functions ─────────────────────────
 
 function verifyTotpCode(secret: string | null, code: string): boolean {

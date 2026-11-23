@@ -1,4 +1,4 @@
-import { pool, createNotification, logAudit } from '../db.js';
+import { pool, createNotification } from '../db.js';
 import { enqueueTxSubmit } from '../queue.js';
 import { NOTIFICATION_KINDS } from '../constants/notification-kinds.js';
 import { logger } from '../lib/logger.js';

@@ -388,5 +388,53 @@ tariffshield/
 │       │       └── [id]/page.tsx      (importer detail + clawback)
 │       ├── components/Nav.tsx
 │       └── lib/{api,auth}.ts
-└── scripts/sdk-smoke.ts               (read-only health check)
+└── scripts/                           (see §12 for the full index)
 ```
+
+## 12. Scripts & Tooling
+
+Every file in `scripts/`. "npm script" is the root `package.json` alias where one exists; otherwise run with `npx tsx scripts/<file>`. Keep this table in sync when adding scripts (see CONTRIBUTING.md, "Adding a new script").
+
+### Deployment & upgrade
+
+| File | npm script | Purpose |
+|---|---|---|
+| `deploy-contracts.ts` | `contract:deploy` | Wraps `stellar contract deploy` + `initialize` (README Quickstart). |
+| `upgrade.ts` | `upgrade` | Multi-sig upgrade CLI: propose / approve a new wasm hash. |
+| `upgrade-dry-run.ts` | — | Simulates an upgrade without submitting it. |
+| `backup-state.ts` | `backup-state` | Pre-upgrade export of all on-chain Account structs to timestamped JSON + checksum. |
+| `verify-upgrade.ts` | `verify-upgrade` | Post-upgrade suite: accounts readable, storage intact, entrypoints work. |
+| `rollback-upgrade.ts` | `rollback-upgrade` | Emergency rollback to a previous wasm hash. |
+| `list-wasm-hashes.ts` | `list-wasm-hashes` | Lists wasm hashes from deployment history (to pick a rollback target). |
+| `migrate-storage.ts` | — | Re-persists each importer's Account after a contract upgrade via `migrate_account`. |
+| `rotate-admin.ts` | — | Zero-downtime admin keypair rotation for the contract. |
+| `check-contract-version.ts` | — | Checks a deployed contract's version against the SDK's compatibility range. |
+
+### Local development
+
+| File | npm script | Purpose |
+|---|---|---|
+| `setup-env.ts` | `setup-env` | Creates `.env` files from every `.env.example` under `apps/`. |
+| `seed.ts` | `seed` | Idempotent local DB seeder (`--shortfall` for the auto-top-up demo). |
+| `admin.ts` | `admin` | Platform admin CLI: `register-importer`, `list-importers`, `get-importer`, `set-required`, `auto-top-up`, `accrue-yield`. |
+| `e2e.ts` | `e2e` | Happy-path end-to-end flow from the README "Verification flow"; needs the API running. |
+| `sdk-smoke.ts` | `sdk-smoke` | Read-only SDK health check against the contract in `deployments.json`. |
+| `dep-graph.ts` | `dep-graph` | Generates the workspace dependency graph (`docs/dep-graph.md`). |
+| `test-regulatory-report.ts` | `test:regulatory-report` | Manual check of the regulatory report API; not run in CI. See [docs/compliance/regulatory-report-verification.md](docs/compliance/regulatory-report-verification.md). |
+
+### Security & compliance
+
+| File | npm script | Purpose |
+|---|---|---|
+| `ingest-dast-findings.ts` | — | Ingests an OWASP ZAP JSON report into `security_findings` (used by `.github/workflows/dast.yml`). |
+| `verify-dast-findings.ts` | — | Fails the DAST workflow if the report contains high/critical findings. |
+
+### Backup & disaster recovery
+
+| File | npm script | Purpose |
+|---|---|---|
+| `backup-cleanup-lambda.ts` | — | AWS Lambda: deletes RDS snapshots past their retention policy and records the deletions. |
+| `backup-compliance-report-lambda.ts` | — | AWS Lambda: produces backup compliance evidence (snapshot age/encryption) to S3. |
+| `backup-restore-drill.sh` | — | Shell drill that restores a backup to verify recoverability. |
+
+Shared logic for these scripts lives in `scripts/lib/`; their unit tests in `scripts/__tests__/` (`npm run test:scripts`).

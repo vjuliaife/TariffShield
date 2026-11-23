@@ -20,7 +20,10 @@ import {
   DeploymentHistoryNotFoundError,
   EmptyDeploymentHistoryError,
   filterDeployments,
+  formatTable,
+  InvalidFormatError,
   loadHistory,
+  parseFormat,
   selectPreviousDeployment,
   sortByDeployedAtDescending,
   type DeploymentRecord,
@@ -285,5 +288,95 @@ describe("list-wasm-hashes.ts main() error paths (process.exit mocked)", () => {
         String(c.arguments[0]).includes("No deployment history found"),
       ),
     );
+  });
+});
+
+describe("parseFormat", () => {
+  it("defaults to table", () => {
+    assert.equal(parseFormat([]), "table");
+  });
+  it("accepts --format json and --format=table", () => {
+    assert.equal(parseFormat(["--format", "json"]), "json");
+    assert.equal(parseFormat(["--format=table"]), "table");
+  });
+  it("throws on invalid or missing value", () => {
+    assert.throws(() => parseFormat(["--format", "yaml"]), InvalidFormatError);
+    assert.throws(() => parseFormat(["--format"]), InvalidFormatError);
+  });
+});
+
+describe("formatTable", () => {
+  it("renders aligned columns with hash, timestamp and deployer", () => {
+    const out = formatTable([
+      makeDeployment({ wasmHash: "abc123", deployedAt: "2026-02-01T00:00:00Z", deployedBy: "GDEPLOYER" }),
+      makeDeployment({ wasmHash: "def4567890", deployedAt: "2026-01-01T00:00:00Z", deployedBy: undefined }),
+    ]);
+    const lines = out.split("\n");
+    assert.match(lines[0], /^#\s+WASM HASH\s+DEPLOYED AT\s+DEPLOYED BY/);
+    assert.match(lines[2], /^1\*\s+abc123\s+2026-02-01T00:00:00Z\s+GDEPLOYER/);
+    assert.match(lines[3], /def4567890\s+2026-01-01T00:00:00Z\s+unknown/);
+    // column alignment: DEPLOYED AT starts at the same offset in every row
+    const col = lines[0].indexOf("DEPLOYED AT");
+    assert.equal(lines[2].indexOf("2026-02-01"), col);
+    assert.equal(lines[3].indexOf("2026-01-01"), col);
+  });
+});
+
+describe("list-wasm-hashes.ts main() --format / --help", () => {
+  const originalCwd = process.cwd();
+  let tmpDir: string | undefined;
+
+  afterEach(() => {
+    mock.restoreAll();
+    process.chdir(originalCwd);
+    if (tmpDir) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+      tmpDir = undefined;
+    }
+  });
+
+  function setupHistory() {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "list-wasm-hashes-format-test-"));
+    fs.mkdirSync(path.join(tmpDir, "deployments"));
+    fs.writeFileSync(
+      path.join(tmpDir, "deployments", "history.json"),
+      JSON.stringify([
+        makeDeployment({ wasmHash: "old", deployedAt: "2026-01-01T00:00:00Z" }),
+        makeDeployment({ wasmHash: "new", deployedAt: "2026-02-01T00:00:00Z" }),
+      ]),
+    );
+    process.chdir(tmpDir);
+  }
+
+  it("prints a table by default", async () => {
+    setupHistory();
+    const logMock = mock.method(console, "log", () => {});
+    await main([]);
+    const output = logMock.mock.calls.map((c) => String(c.arguments[0])).join("\n");
+    assert.match(output, /WASM HASH\s+DEPLOYED AT\s+DEPLOYED BY/);
+  });
+
+  it("prints parseable JSON sorted newest-first with --format json", async () => {
+    setupHistory();
+    const logMock = mock.method(console, "log", () => {});
+    await main(["--format", "json"]);
+    assert.equal(logMock.mock.calls.length, 1);
+    const parsed = JSON.parse(String(logMock.mock.calls[0].arguments[0]));
+    assert.deepEqual(parsed.map((d: DeploymentRecord) => d.wasmHash), ["new", "old"]);
+  });
+
+  it("prints usage for --help without reading history", async () => {
+    const logMock = mock.method(console, "log", () => {});
+    await main(["--help"]);
+    assert.match(String(logMock.mock.calls[0].arguments[0]), /--format table\|json/);
+  });
+
+  it("exits 1 on an invalid --format", async () => {
+    const exitMock = mock.method(process, "exit", (() => {
+      throw new Error("process.exit called");
+    }) as unknown as (code?: number) => never);
+    mock.method(console, "error", () => {});
+    await assert.rejects(() => main(["--format", "yaml"]), /process\.exit called/);
+    assert.equal(exitMock.mock.calls[0].arguments[0], 1);
   });
 });

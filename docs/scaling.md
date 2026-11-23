@@ -114,7 +114,8 @@ against `GET /health/ready` on each upstream.
 
 ## Verifying under load
 
-The k6 benchmark suite added for #265 (`apps/api/tests/load/`) targets a
+The k6 benchmark suite added for #265 (`apps/api/tests/load/`; prerequisites
+and run instructions are in [CONTRIBUTING.md](../CONTRIBUTING.md#benchmarks)) targets a
 single instance. Running it against 2+ instances behind the load balancer
 described above, and confirming error rate stays under the existing 0.1%
 target at the documented VU counts, is the concrete verification step for

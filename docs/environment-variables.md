@@ -17,6 +17,10 @@ Source of truth for these descriptions is the Zod schema in `apps/api/src/config
 | `PORT` | No (default: `3002`) | Port the Express API listens on | `3002` |
 | `NODE_ENV` | No (default: `development`) | Application environment. Accepted: `development`, `production`, `test` | `development` |
 | `DATABASE_URL` | **Yes** | PostgreSQL connection string. Append `?sslmode=require` for managed databases | `postgres://tariffshield:secret@localhost:5443/tariffshield` |
+| `PG_POOL_MAX` | No (default: `20`) | Max concurrent PostgreSQL connections per API instance. Raise it if `pg_pool_waiting` stays above 5 for more than 10s, subject to the database's own `max_connections` | `20` |
+| `PG_IDLE_TIMEOUT_MS` | No (default: `30000`) | Milliseconds an idle PostgreSQL client is kept before being closed | `30000` |
+| `PG_CONN_TIMEOUT_MS` | No (default: `3000`) | Milliseconds to wait for a new PostgreSQL connection before failing fast | `3000` |
+| `PG_STATEMENT_TIMEOUT_MS` | No (default: `10000`) | Milliseconds before a single PostgreSQL statement is cancelled | `10000` |
 | `REDIS_URL` | No (default: `redis://localhost:6379`) | Redis connection string, shared by the BullMQ job queue (`queue.ts`) and the on-chain account state cache (`cache.ts`, #246) — caches `GET /importers/:id` Soroban RPC reads under key `onchain:importer:<id>` with a 30s TTL | `redis://localhost:6379` |
 | `TX_SUBMIT_WORKER_CONCURRENCY` | No (default: `8`) | Number of `tx-submit` jobs (`queue.ts`) the worker (`worker.ts`) processes concurrently — see `docs/investigations/deposit-collateral-throughput.md` (#1089) for why 8 and not BullMQ's default of 1 | `8` |
 | `FRONTEND_ORIGIN` | No (default: `http://localhost:3000`) | CORS allowed origin for the web frontend | `http://localhost:3000` |
@@ -173,7 +177,10 @@ When adding a new environment variable:
 
 1. Add it to the Zod schema in `apps/api/src/config/env.ts` with a `.describe()` annotation.
 2. Add it to `apps/api/.env.example` with a commented example value and a `# [Required]` or `# [Optional]` prefix.
-3. Add a row to the relevant table in this document.
+3. Run `npm run sync:env-example` to regenerate the root `.env.example`.
+4. Add a row to the relevant table in this document.
+
+`apps/api/.env.example` is the single source of truth, since the Zod schema it mirrors lives in `apps/api`. The root `.env.example` is a generated copy of it, kept only so repo-root scripts (`seed`, `admin`, ...) and the `cp .env.example .env` setup flows (README, CONTRIBUTING, devcontainer, `dast.yml`) keep working — never edit it by hand. `npm run check:env-example` (run by the `env-example sync` job in `.github/workflows/lint.yml`) fails if the two files declare different variables. Web variables live in `apps/web/.env.example`.
 
 To enforce that all required variables are present before the server starts, the schema validates at import time and calls `process.exit(1)` with a descriptive error for each missing or invalid variable.
 

@@ -1,9 +1,44 @@
+/**
+ * scripts/migrate-storage.ts
+ *
+ * Re-persists every importer's on-chain Account state after the v0_1_0 -> v0_2_0
+ * contract upgrade by invoking the contract's `migrate_account` entrypoint
+ * (see docs/mainnet-migration.md).
+ *
+ * Usage:
+ *   npx tsx scripts/migrate-storage.ts --dry-run              # plan against the configured contract (read-only)
+ *   npx tsx scripts/migrate-storage.ts --dry-run --offline    # plan against local seed data (no RPC / deployments.json)
+ *   npx tsx scripts/migrate-storage.ts --help
+ *   npx tsx scripts/migrate-storage.ts                        # live migration (submits transactions)
+ *
+ * Flags:
+ *   --dry-run  Log the planned per-account oldValues/newValues diff without
+ *              signing or submitting any transaction. A MigrationLog JSON file
+ *              is still written to migration-logs/.
+ *   --offline  Only valid together with --dry-run: derive each account's state
+ *              from the local docker-compose Postgres (`docker compose up -d
+ *              postgres && npm run seed`) instead of fetching it from Soroban
+ *              RPC. No deployments.json or deployed contract required.
+ *   --help     Print this usage.
+ *
+ * Environment:
+ *   DATABASE_URL     Postgres connection string (defaults to the local
+ *                    docker-compose database).
+ *   PLATFORM_SECRET  Signs migrate_account transactions; live runs only.
+ */
+
 import { TariffShieldClient } from "../packages/sdk/src/index.js";
-import { Keypair } from "@stellar/stellar-sdk";
-import deployments from "../deployments.json" with { type: "json" };
+import { Address, Keypair, nativeToScVal } from "@stellar/stellar-sdk";
 import { Pool } from "pg";
 import fs from "fs";
 import path from "path";
+import {
+  accountFromImporterRow,
+  accountToMap,
+  planAccountMigration,
+  validateAccount,
+  type MigratableAccount,
+} from "./lib/migrate-storage-logic.js";
 
 interface MigrationLog {
   timestamp: string;
@@ -23,8 +58,44 @@ interface MigrationLog {
   };
 }
 
+interface Deployments {
+  rpcUrl: string;
+  contractId: string;
+  networkPassphrase: string;
+}
+
 const MAX_RETRIES = 5;
 const BASE_BACKOFF_MS = 1000;
+const DEFAULT_DATABASE_URL =
+  "postgres://tariffshield:tariffshield_dev_password@localhost:5443/tariffshield";
+
+function printUsage(): void {
+  console.log("Usage: npx tsx scripts/migrate-storage.ts [--dry-run [--offline]]");
+  console.log("");
+  console.log(
+    "  --dry-run  Log the planned per-account oldValues/newValues diff without submitting transactions."
+  );
+  console.log(
+    "  --offline  With --dry-run: plan against local docker-compose Postgres seed data instead of Soroban RPC."
+  );
+  console.log("  --help     Print this usage.");
+}
+
+/**
+ * Loads deployments.json lazily (instead of at import time) so that
+ * --dry-run --offline works in checkouts where the gitignored file is absent.
+ */
+function loadDeployments(): Deployments {
+  const deploymentsPath = path.resolve(process.cwd(), "deployments.json");
+  if (!fs.existsSync(deploymentsPath)) {
+    console.error(`[migrate] deployments.json not found at ${deploymentsPath}`);
+    console.error(
+      "[migrate] Deploy the contract first, or run `--dry-run --offline` to plan against local seed data."
+    );
+    process.exit(1);
+  }
+  return JSON.parse(fs.readFileSync(deploymentsPath, "utf-8")) as Deployments;
+}
 
 async function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -53,74 +124,62 @@ async function loadImporterAddresses(pool: Pool): Promise<string[]> {
   return result.rows.map((row) => row.stellar_address);
 }
 
-async function validateAccount(account: {
-  bondId: bigint;
-  collateralBalance: bigint;
-  requiredCollateral: bigint;
-  reserveBalance: bigint;
-  yieldAccrued: bigint;
-  isClawbacked: boolean;
-  collateralLastUpdated: bigint;
-}): Promise<{ valid: boolean; errors: string[] }> {
-  const errors: string[] = [];
+/**
+ * Offline account source for `--dry-run --offline`: builds each demo importer's
+ * account from local seed data instead of the chain, so the migration plan can
+ * be reviewed without a deployed contract. `required_collateral` comes from the
+ * importer's latest tariff upload; on-chain-only fields default to zero.
+ */
+async function loadOfflineAccounts(pool: Pool): Promise<Map<string, MigratableAccount>> {
+  const result = await pool.query(
+    `SELECT i.stellar_address,
+            i.bond_id,
+            i.collateral_balance,
+            (SELECT t.computed_required_collateral
+               FROM tariff_uploads t
+              WHERE t.importer_id = i.id
+              ORDER BY t.created_at DESC
+              LIMIT 1) AS required_collateral
+       FROM importers i
+      WHERE i.stellar_address IS NOT NULL
+      ORDER BY i.created_at`
+  );
 
-  if (account.collateralBalance < 0n) {
-    errors.push("collateralBalance is negative");
+  const accounts = new Map<string, MigratableAccount>();
+  for (const row of result.rows) {
+    accounts.set(row.stellar_address, accountFromImporterRow(row));
   }
-  if (account.requiredCollateral < 0n) {
-    errors.push("requiredCollateral is negative");
-  }
-  if (account.reserveBalance < 0n) {
-    errors.push("reserveBalance is negative");
-  }
-  if (account.yieldAccrued < 0n) {
-    errors.push("yieldAccrued is negative");
-  }
-  if (!account.bondId || account.bondId === 0n) {
-    errors.push("bondId is missing or zero");
-  }
-  if (typeof account.isClawbacked !== "boolean") {
-    errors.push("isClawbacked is not a boolean");
-  }
-
-  return {
-    valid: errors.length === 0,
-    errors,
-  };
-}
-
-function accountToMap(account: {
-  bondId: bigint;
-  collateralBalance: bigint;
-  requiredCollateral: bigint;
-  reserveBalance: bigint;
-  yieldAccrued: bigint;
-  isClawbacked: boolean;
-  collateralLastUpdated: bigint;
-}): Record<string, string> {
-  return {
-    bond_id: account.bondId.toString(),
-    collateral_balance: account.collateralBalance.toString(),
-    required_collateral: account.requiredCollateral.toString(),
-    reserve_balance: account.reserveBalance.toString(),
-    yield_accrued: account.yieldAccrued.toString(),
-    is_clawbacked: account.isClawbacked.toString(),
-    collateral_last_updated: account.collateralLastUpdated.toString(),
-  };
+  return accounts;
 }
 
 async function main() {
-  const isDryRun = process.argv.includes("--dry-run");
-  console.log(`[migrate] mode: ${isDryRun ? "dry-run (no transactions)" : "live (will update accounts)"}`);
+  const args = process.argv.slice(2);
 
-  const client = new TariffShieldClient({
-    rpcUrl: deployments.rpcUrl,
-    contractId: deployments.contractId,
-    networkPassphrase: deployments.networkPassphrase,
-  });
+  if (args.includes("--help") || args.includes("-h")) {
+    printUsage();
+    return;
+  }
+
+  const isDryRun = args.includes("--dry-run");
+  const isOffline = args.includes("--offline");
+
+  if (isOffline && !isDryRun) {
+    console.error("[migrate] --offline is only supported together with --dry-run");
+    printUsage();
+    process.exit(1);
+  }
+
+  const mode = isDryRun
+    ? isOffline
+      ? "dry-run (offline: local seed data)"
+      : "dry-run (no transactions)"
+    : "live (will update accounts)";
+  console.log(`[migrate] mode: ${mode}`);
+
+  const client = isOffline ? null : new TariffShieldClient(loadDeployments());
 
   const dbPool = new Pool({
-    connectionString: process.env.DATABASE_URL,
+    connectionString: process.env.DATABASE_URL || DEFAULT_DATABASE_URL,
   });
 
   const startTime = Date.now();
@@ -132,7 +191,10 @@ async function main() {
 
   try {
     console.log("[migrate] Loading importer addresses from database...");
-    const addresses = await loadImporterAddresses(dbPool);
+    const offlineAccounts = isOffline ? await loadOfflineAccounts(dbPool) : null;
+    const addresses = offlineAccounts
+      ? [...offlineAccounts.keys()]
+      : await loadImporterAddresses(dbPool);
     log.summary.total = addresses.length;
     console.log(`[migrate] Found ${addresses.length} importers to migrate`);
 
@@ -148,23 +210,31 @@ async function main() {
       };
 
       try {
-        const account = await withRetry(
-          () => client.getAccount(address),
-          `fetch account ${address}`,
-        );
+        const account: MigratableAccount = offlineAccounts
+          ? offlineAccounts.get(address)!
+          : await withRetry(
+              () => client!.getAccount(address),
+              `fetch account ${address}`,
+            );
 
-        const validation = await validateAccount(account);
+        const validation = validateAccount(account);
         if (!validation.valid) {
           throw new Error(`Account validation failed: ${validation.errors.join(", ")}`);
         }
 
-        logEntry.oldValues = accountToMap(account);
-        logEntry.newValues = accountToMap(account);
+        const plan = planAccountMigration(address, account);
+        logEntry.oldValues = plan.oldValues;
+        logEntry.newValues = plan.newValues;
 
         if (isDryRun) {
           console.log(`  [dry-run] Would migrate ${address}`);
-          console.log(`    Old: ${JSON.stringify(logEntry.oldValues)}`);
-          console.log(`    New: ${JSON.stringify(logEntry.newValues)}`);
+          console.log(`    Old: ${JSON.stringify(plan.oldValues)}`);
+          console.log(`    New: ${JSON.stringify(plan.newValues)}`);
+          console.log(
+            plan.changedFields.length > 0
+              ? `    Changed fields: ${plan.changedFields.join(", ")}`
+              : "    Changed fields: none (account re-persisted unchanged)"
+          );
           logEntry.status = "success";
           log.summary.successful++;
         } else {
@@ -172,8 +242,8 @@ async function main() {
           const signer = Keypair.fromSecret(process.env.PLATFORM_SECRET!);
           const result = await withRetry(
             () =>
-              client.invokeAndSubmit(signer, "migrate_account", [
-                new (await import("@stellar/stellar-sdk")).Address(address).toScVal(),
+              client!.invokeAndSubmit(signer, "migrate_account", [
+                new Address(address).toScVal(),
                 nativeToScVal(account, { type: "object" }),
               ]),
             `migrate account ${address}`,
@@ -193,37 +263,45 @@ async function main() {
       log.accounts.push(logEntry);
     }
 
-    console.log("[migrate] Post-migration verification...");
     let verificationPassed = 0;
     let verificationFailed = 0;
 
-    for (const entry of log.accounts) {
-      if (entry.status !== "success") continue;
-      try {
-        const account = await withRetry(
-          () => client.getAccount(entry.address),
-          `verify account ${entry.address}`,
-        );
-        const newMap = accountToMap(account);
-        const matches = JSON.stringify(entry.newValues) === JSON.stringify(newMap);
-        if (matches) {
-          console.log(`  [verified] ${entry.address}`);
-          verificationPassed++;
-        } else {
-          console.error(`  [mismatch] ${entry.address}`);
+    if (isOffline) {
+      console.log(
+        "[migrate] Offline dry-run: skipping post-migration verification (no chain state to compare)"
+      );
+    } else {
+      console.log("[migrate] Post-migration verification...");
+
+      for (const entry of log.accounts) {
+        if (entry.status !== "success") continue;
+        try {
+          const account = await withRetry(
+            () => client!.getAccount(entry.address),
+            `verify account ${entry.address}`,
+          );
+          const newMap = accountToMap(account);
+          const matches = JSON.stringify(entry.newValues) === JSON.stringify(newMap);
+          if (matches) {
+            console.log(`  [verified] ${entry.address}`);
+            verificationPassed++;
+          } else {
+            console.error(`  [mismatch] ${entry.address}`);
+            verificationFailed++;
+          }
+        } catch (err) {
+          console.error(`  [verify-error] ${entry.address}: ${(err as Error).message}`);
           verificationFailed++;
         }
-      } catch (err) {
-        console.error(`  [verify-error] ${entry.address}: ${(err as Error).message}`);
-        verificationFailed++;
       }
+
+      console.log(`[migrate] Verification: ${verificationPassed} passed, ${verificationFailed} failed`);
     }
 
     log.summary.duration = Date.now() - startTime;
     console.log(
       `\n[migrate] Complete: ${log.summary.successful}/${log.summary.total} migrated, ${log.summary.failed} failed`,
     );
-    console.log(`[migrate] Verification: ${verificationPassed} passed, ${verificationFailed} failed`);
     console.log(`[migrate] Duration: ${(log.summary.duration / 1000).toFixed(2)}s`);
 
     const logsDir = path.join(process.cwd(), "migration-logs");
@@ -247,11 +325,6 @@ async function main() {
   } finally {
     await dbPool.end();
   }
-}
-
-function nativeToScVal(value: unknown, options?: { type?: string }): any {
-  const { nativeToScVal } = require("@stellar/stellar-sdk");
-  return nativeToScVal(value, options);
 }
 
 main().catch((err) => {

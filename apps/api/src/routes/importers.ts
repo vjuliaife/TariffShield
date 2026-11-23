@@ -52,11 +52,7 @@ import {
   type OnChainAccountView,
 } from '../cache.js';
 import { computeNextRunAt } from '../services/deposit-schedules.js';
-import {
-  ALLOWED_WEBHOOK_EVENT_TYPES,
-  generateWebhookSecret,
-  type WebhookEventType,
-} from '../services/webhooks.js';
+import { generateWebhookSecret } from '../services/webhooks.js';
 
 export const importersRouter = Router();
 importersRouter.use(authMiddleware);
@@ -3444,7 +3440,7 @@ importersRouter.get('/:id/portfolio', async (req: Request, res: Response) => {
       reserveBalance: acct.reserveBalance.toString(),
       yieldAccrued: acct.yieldAccrued.toString(),
     };
-  } catch (err) {
+  } catch {
     collateralStatus = null;
   }
 

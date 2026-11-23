@@ -5,16 +5,16 @@ import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node';
 import { Resource } from '@opentelemetry/resources';
 import {
-  SEMRESATTRS_SERVICE_NAME,
-  SEMRESATTRS_SERVICE_VERSION,
+  ATTR_SERVICE_NAME,
+  ATTR_SERVICE_VERSION,
 } from '@opentelemetry/semantic-conventions';
 
 const exporterEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? 'http://localhost:4318';
 
 const sdk = new NodeSDK({
   resource: new Resource({
-    [SEMRESATTRS_SERVICE_NAME]: 'tariffshield-api',
-    [SEMRESATTRS_SERVICE_VERSION]: process.env.npm_package_version ?? '0.0.0',
+    [ATTR_SERVICE_NAME]: 'tariffshield-api',
+    [ATTR_SERVICE_VERSION]: process.env.npm_package_version ?? '0.0.0',
   }),
   traceExporter: new OTLPTraceExporter({
     url: `${exporterEndpoint}/v1/traces`,

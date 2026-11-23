@@ -6,7 +6,12 @@
  * to help identify the correct previous hash for rollback operations.
  *
  * Usage:
- *   tsx scripts/list-wasm-hashes.ts
+ *   tsx scripts/list-wasm-hashes.ts [--format table|json]
+ *
+ * Options:
+ *   --format table   Aligned human-readable table (default)
+ *   --format json    Machine-readable JSON array, for scripting/CI
+ *   -h, --help       Show this help
  *
  * The filtering/fallback/sort/selection logic lives in
  * scripts/lib/list-wasm-hashes-logic.ts as pure, exported functions
@@ -22,12 +27,44 @@ import {
   DeploymentHistoryNotFoundError,
   EmptyDeploymentHistoryError,
   filterDeployments,
+  formatTable,
+  InvalidFormatError,
   loadHistory,
+  parseFormat,
   selectPreviousDeployment,
   sortByDeployedAtDescending,
 } from "./lib/list-wasm-hashes-logic.js";
 
-export async function main() {
+const HELP = `Usage: tsx scripts/list-wasm-hashes.ts [--format table|json]
+
+Lists TariffShield contract wasm hashes from deployments/history.json.
+
+Options:
+  --format table   Aligned human-readable table (default)
+  --format json    Machine-readable JSON array, for scripting/CI
+  -h, --help       Show this help
+
+Environment:
+  TARIFF_SHIELD_CONTRACT_ID   Filter to one contract
+  STELLAR_NETWORK             Filter to a network (default: testnet)`;
+
+export async function main(argv: string[] = process.argv.slice(2)) {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    console.log(HELP);
+    return;
+  }
+
+  let format;
+  try {
+    format = parseFormat(argv);
+  } catch (error) {
+    if (error instanceof InvalidFormatError) {
+      console.error(`ERROR: ${error.message}`);
+      process.exit(1);
+    }
+    throw error;
+  }
+
   const historyPath = path.join(process.cwd(), "deployments", "history.json");
 
   let history;
@@ -63,29 +100,26 @@ export async function main() {
   // all, in which case there's nothing to report as a fallback).
   const usedFallback = relevantDeployments === history && Boolean(contractId || network);
 
+  const sorted = sortByDeployedAtDescending(relevantDeployments);
+
+  if (format === "json") {
+    // Keep stdout pure JSON so it can be piped; fallback notice goes to stderr.
+    if (usedFallback) {
+      console.error("No deployments found for current contract/network; showing all deployments");
+    }
+    console.log(JSON.stringify(sorted, null, 2));
+    return;
+  }
+
   if (usedFallback) {
     console.log("No deployments found for current contract/network");
     console.log("\nShowing all deployments:");
   }
 
   console.log("=== TariffShield Contract Deployment History ===\n");
-  console.log(`Total deployments: ${relevantDeployments.length}\n`);
-
-  const sorted = sortByDeployedAtDescending(relevantDeployments);
-
-  sorted.forEach((deployment, index) => {
-    const isCurrent = index === 0;
-    const marker = isCurrent ? " (CURRENT)" : "";
-
-    console.log(`${index + 1}. ${marker}`);
-    console.log(`   WASM Hash: ${deployment.wasmHash}`);
-    console.log(`   Contract:  ${deployment.contractId}`);
-    console.log(`   Network:   ${deployment.network}`);
-    console.log(`   Version:   ${deployment.version || "unknown"}`);
-    console.log(`   Deployed:  ${deployment.deployedAt}`);
-    console.log(`   By:        ${deployment.deployedBy || "unknown"}`);
-    console.log("");
-  });
+  console.log(`Total deployments: ${sorted.length}\n`);
+  console.log(formatTable(sorted));
+  console.log("");
 
   const previousDeployment = selectPreviousDeployment(sorted);
   if (previousDeployment) {

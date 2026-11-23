@@ -1,3 +1,0 @@
-{
-  "extends": ["tariffshield", "next/core-web-vitals"]
-}
