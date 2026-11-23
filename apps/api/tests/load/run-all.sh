@@ -18,6 +18,8 @@ SCRIPTS=(
   "post-deposit.js"
   "post-withdraw.js"
   "post-auto-top-up.js"
+  "post-erasure-request.js"
+  "post-accept-tos.js"
 )
 
 overall_status=0
