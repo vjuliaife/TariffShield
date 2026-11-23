@@ -144,8 +144,7 @@ The watch command uses `-w src/` to watch crate source files only, avoiding buil
 | SDK tests | `npm run test --workspace=packages/sdk` (runs `src/compatibility.test.ts` via `tsx --test`) |
 | Operational scripts | `npm run test:scripts` (runs `scripts/__tests__/*.test.ts` via `tsx --test --test-force-exit`; node-only, no external services) |
 | Happy-path e2e smoke | `npm run e2e` — start the API first (`npm run dev:api`), then run from the repo root. Exits non-zero on any step failure. |
-| SDK smoke test (read-only, against the deployed contract in `deployments.json`) | `npm run sdk-smoke` |
-| Regulatory report API check (manual, not in CI; needs the API running) | `npm run test:regulatory-report` — see [docs/compliance/regulatory-report-verification.md](docs/compliance/regulatory-report-verification.md) |
+| Web unit tests | `npm test --workspace=apps/web` (Vitest; `test:watch` and `test:coverage` also available) |
 | End-to-end tests | `npx playwright test` (from `apps/web`; see `apps/web/package.json` `test:e2e`) |
 | Load/benchmark suite | `npm run benchmark` — requires [k6](https://k6.io/docs/get-started/installation/) and a running API; see [Benchmarks](#benchmarks) |
 
