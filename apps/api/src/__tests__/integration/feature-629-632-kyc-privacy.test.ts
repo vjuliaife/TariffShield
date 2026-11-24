@@ -2,8 +2,11 @@ import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
-import { privacyRouter } from '../../routes/privacy.js';
-import { kycRouter } from '../../routes/kyc.js';
+
+process.env.FIELD_ENCRYPTION_KEY ??= 'integration-test-field-encryption-key-32-chars';
+
+const { privacyRouter } = await import('../../routes/privacy.js');
+const { kycRouter, s3KeyEncrypt } = await import('../../routes/kyc.js');
 
 const DATABASE_URL =
   process.env.DATABASE_URL ?? 'postgres://test:test@localhost:5432/tariffshield_test';
@@ -79,7 +82,7 @@ describe('KYC download and privacy acceptance integrations (#629, #630, #631, #6
          (importer_id, document_type, s3_key_encrypted, scheduled_deletion_date)
        VALUES ($1, 'ein_confirmation', $2, now() + interval '7 years')
        RETURNING id`,
-      [ownerImporterId, `kyc/${ownerImporterId}/document.pdf`]
+      [ownerImporterId, s3KeyEncrypt(`kyc/${ownerImporterId}/document.pdf`)]
     );
     documentId = document.rows[0]!.id;
 
@@ -89,14 +92,21 @@ describe('KYC download and privacy acceptance integrations (#629, #630, #631, #6
        VALUES ($1, CURRENT_DATE, 'integration test policy', TRUE)`,
       [policyVersion]
     );
-    await pool.query('UPDATE users SET privacy_reacceptance_required = TRUE WHERE id = $1', [ownerId]);
+    await pool.query('UPDATE users SET privacy_reacceptance_required = TRUE WHERE id = $1', [
+      ownerId,
+    ]);
   });
 
   after(async () => {
-    await pool.query('DELETE FROM privacy_policy_acceptances WHERE policy_version_id = $1', [policyVersion]);
+    await pool.query('DELETE FROM privacy_policy_acceptances WHERE policy_version_id = $1', [
+      policyVersion,
+    ]);
     await pool.query('DELETE FROM privacy_policy_versions WHERE version_id = $1', [policyVersion]);
     await pool.query('DELETE FROM kyc_documents WHERE id = $1', [documentId]);
-    await pool.query('DELETE FROM importers WHERE id IN ($1, $2)', [ownerImporterId, otherImporterId]);
+    await pool.query('DELETE FROM importers WHERE id IN ($1, $2)', [
+      ownerImporterId,
+      otherImporterId,
+    ]);
     await pool.query('DELETE FROM users WHERE id IN ($1, $2, $3)', [ownerId, otherUserId, adminId]);
     await pool.end();
   });
@@ -106,7 +116,10 @@ describe('KYC download and privacy acceptance integrations (#629, #630, #631, #6
     const { res, captured } = response();
 
     await download(
-      { params: { id: ownerImporterId, docId: documentId }, user: { id: ownerId, role: 'importer' } },
+      {
+        params: { id: ownerImporterId, docId: documentId },
+        user: { id: ownerId, role: 'importer' },
+      },
       res
     );
 
@@ -122,7 +135,10 @@ describe('KYC download and privacy acceptance integrations (#629, #630, #631, #6
 
     const unauthorized = response();
     await download(
-      { params: { id: ownerImporterId, docId: documentId }, user: { id: otherUserId, role: 'importer' } },
+      {
+        params: { id: ownerImporterId, docId: documentId },
+        user: { id: otherUserId, role: 'importer' },
+      },
       unauthorized.res
     );
     assert.equal(unauthorized.captured.statusCode, 404);
@@ -130,17 +146,63 @@ describe('KYC download and privacy acceptance integrations (#629, #630, #631, #6
 
     const admin = response();
     await download(
-      { params: { id: ownerImporterId, docId: documentId }, user: { id: adminId, role: 'surety_admin' } },
+      {
+        params: { id: ownerImporterId, docId: documentId },
+        user: { id: adminId, role: 'surety_admin' },
+      },
       admin.res
     );
     assert.equal(admin.captured.statusCode, 200);
+
+    await pool.query('UPDATE kyc_documents SET deleted_at = now() WHERE id = $1', [documentId]);
+    const deleted = response();
+    await download(
+      {
+        params: { id: ownerImporterId, docId: documentId },
+        user: { id: ownerId, role: 'importer' },
+      },
+      deleted.res
+    );
+    assert.equal(deleted.captured.statusCode, 404);
+    await pool.query('UPDATE kyc_documents SET deleted_at = NULL WHERE id = $1', [documentId]);
+  });
+
+  it('#630 returns a distinguishable placeholder URL for corrupt ciphertext', async () => {
+    const download = routeHandler(kycRouter, '/:id/kyc/:docId/download', 'get');
+    const corrupt = JSON.stringify({ ciphertext: 'bad', iv: 'bad', tag: 'bad', key_version: 1 });
+    await pool.query('UPDATE kyc_documents SET s3_key_encrypted = $1 WHERE id = $2', [
+      corrupt,
+      documentId,
+    ]);
+    const { res, captured } = response();
+
+    await download(
+      {
+        params: { id: ownerImporterId, docId: documentId },
+        user: { id: ownerId, role: 'importer' },
+      },
+      res
+    );
+
+    assert.equal(captured.statusCode, 200);
+    assert.deepEqual(captured.body, {
+      url: '/dev/kyc-stub/[decryption error]',
+      expiresInSeconds: 900,
+    });
+    await pool.query('UPDATE kyc_documents SET s3_key_encrypted = $1 WHERE id = $2', [
+      s3KeyEncrypt(`kyc/${ownerImporterId}/document.pdf`),
+      documentId,
+    ]);
   });
 
   it('#631 accepts a valid privacy version and clears the reacceptance flag', async () => {
     const accept = routeHandler(privacyRouter, '/accept-privacy-policy', 'post');
     const { res, captured } = response();
 
-    await accept({ body: { versionId: policyVersion }, ip: '127.0.0.1', user: { id: ownerId } }, res);
+    await accept(
+      { body: { versionId: policyVersion }, ip: '127.0.0.1', user: { id: ownerId } },
+      res
+    );
 
     assert.equal(captured.statusCode, 200);
     assert.deepEqual(captured.body, { accepted: true, versionId: policyVersion });
@@ -158,14 +220,38 @@ describe('KYC download and privacy acceptance integrations (#629, #630, #631, #6
       [ownerId, policyVersion]
     );
     assert.deepEqual(acceptance.rows, [{ acceptance_channel: 'in_app', ip_address: '127.0.0.1' }]);
+
+    await accept(
+      { body: { versionId: policyVersion }, ip: '127.0.0.1', user: { id: ownerId } },
+      res
+    );
+    const count = await pool.query<{ count: string }>(
+      'SELECT COUNT(*) AS count FROM privacy_policy_acceptances WHERE user_id = $1 AND policy_version_id = $2',
+      [ownerId, policyVersion]
+    );
+    assert.equal(Number(count.rows[0]!.count), 1);
+
+    const history = routeHandler(privacyRouter, '/privacy-policy-history', 'get');
+    const historyResponse = response();
+    await history({ user: { id: ownerId } }, historyResponse.res);
+    assert.equal(
+      (historyResponse.captured.body as { acceptances: { policy_version_id: string }[] })
+        .acceptances[0]?.policy_version_id,
+      policyVersion
+    );
   });
 
   it('#632 returns 404 for an unknown privacy version without changing the flag', async () => {
-    await pool.query('UPDATE users SET privacy_reacceptance_required = TRUE WHERE id = $1', [ownerId]);
+    await pool.query('UPDATE users SET privacy_reacceptance_required = TRUE WHERE id = $1', [
+      ownerId,
+    ]);
     const accept = routeHandler(privacyRouter, '/accept-privacy-policy', 'post');
     const { res, captured } = response();
 
-    await accept({ body: { versionId: `${policyVersion}-missing` }, ip: '127.0.0.1', user: { id: ownerId } }, res);
+    await accept(
+      { body: { versionId: `${policyVersion}-missing` }, ip: '127.0.0.1', user: { id: ownerId } },
+      res
+    );
 
     assert.equal(captured.statusCode, 404);
     assert.deepEqual(captured.body, { error: 'policy version not found' });
@@ -175,5 +261,15 @@ describe('KYC download and privacy acceptance integrations (#629, #630, #631, #6
       [ownerId]
     );
     assert.equal(user.rows[0]!.privacy_reacceptance_required, true);
+  });
+
+  it('#632 rejects a missing versionId before querying policy versions', async () => {
+    const accept = routeHandler(privacyRouter, '/accept-privacy-policy', 'post');
+    const { res, captured } = response();
+
+    await accept({ body: {}, ip: '127.0.0.1', user: { id: ownerId } }, res);
+
+    assert.equal(captured.statusCode, 400);
+    assert.deepEqual(captured.body, { error: 'versionId is required' });
   });
 });
