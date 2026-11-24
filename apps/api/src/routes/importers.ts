@@ -106,6 +106,9 @@ importersRouter.post('/', async (req: Request, res: Response) => {
     principalEin: ein,
     bondTypeCode: '02',
     bondAmount: BigInt(initialRequiredCollateral),
+    suretyCompanyName: 'TBD',
+    suretyFein: '00-0000000',
+    effectiveDate: new Date(),
   });
 
   if (!bondValidation.valid) {
@@ -988,12 +991,32 @@ importersRouter.get('/:id', async (req: Request, res: Response) => {
     onChainAccount,
   });
 });
-// #248: cursor-paginated event log using efficient index seek.
-// GET /importers/:id/events accepts ?cursor=&limit= query params (max limit 50, default 20).
-// Seek uses WHERE id < :cursor ORDER BY id DESC LIMIT :limit.
+// #255: cursor-paginated event log, fetched lazily by the dashboard's
+// infinite-scroll event log section instead of being inlined into
+// GET /importers/:id (which used to embed up to 50 events on every load).
+//
+// Cursor is a base64-encoded "<created_at ISO>|<id>" keyset — row-wise
+// comparison on (created_at, id) keeps pagination stable even when many
+// events share the same created_at timestamp.
+function decodeEventsCursor(raw: string): { createdAt: string; id: string } | null {
+  try {
+    const decoded = Buffer.from(raw, 'base64').toString('utf8');
+    const sep = decoded.lastIndexOf('|');
+    if (sep === -1) return null;
+    return { createdAt: decoded.slice(0, sep), id: decoded.slice(sep + 1) };
+  } catch {
+    return null;
+  }
+}
+
+function encodeEventsCursor(createdAt: Date, id: string): string {
+  return Buffer.from(`${createdAt.toISOString()}|${id}`, 'utf8').toString('base64');
+}
+
+// GET /importers/:id/events accepts ?cursor=&limit= query params (max limit 100, default 20).
 const EventsQuerySchema = z.object({
-  cursor: z.string().uuid().optional(),
-  limit: z.coerce.number().int().positive().max(50).default(20),
+  cursor: z.string().optional(),
+  limit: z.coerce.number().int().positive().max(100).default(20),
 });
 
 importersRouter.get('/:id/events', async (req: Request, res: Response) => {
@@ -1008,19 +1031,28 @@ importersRouter.get('/:id/events', async (req: Request, res: Response) => {
     res.status(400).json({ error: 'invalid input', target: 'query', details: parse.error.issues });
     return;
   }
-  const { limit, cursor } = parse.data;
+  const { limit } = parse.data;
+
+  let cursor: { createdAt: string; id: string } | null = null;
+  if (parse.data.cursor) {
+    cursor = decodeEventsCursor(parse.data.cursor);
+    if (!cursor) {
+      res.status(400).json({ error: 'invalid cursor' });
+      return;
+    }
+  }
 
   const rows = cursor
     ? await pool.query(
         `SELECT id, kind, amount, tx_hash, created_at FROM contract_events
-         WHERE importer_id = $1 AND id < $2
-         ORDER BY id DESC LIMIT $3`,
-        [importer.id, cursor, limit]
+         WHERE importer_id = $1 AND (created_at, id) < ($2::timestamptz, $3::uuid)
+         ORDER BY created_at DESC, id DESC LIMIT $4`,
+        [importer.id, cursor.createdAt, cursor.id, limit]
       )
     : await pool.query(
         `SELECT id, kind, amount, tx_hash, created_at FROM contract_events
          WHERE importer_id = $1
-         ORDER BY id DESC LIMIT $2`,
+         ORDER BY created_at DESC, id DESC LIMIT $2`,
         [importer.id, limit]
       );
 
@@ -1034,7 +1066,8 @@ importersRouter.get('/:id/events', async (req: Request, res: Response) => {
   }));
 
   const last = rows.rows[rows.rows.length - 1];
-  const nextCursor = rows.rows.length === limit && last ? last.id : null;
+  const nextCursor =
+    rows.rows.length === limit && last ? encodeEventsCursor(last.created_at, last.id) : null;
 
   res.json({ data: events, nextCursor });
 });

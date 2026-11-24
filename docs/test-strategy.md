@@ -10,7 +10,7 @@ TariffShield spans three runtimes — Rust/Soroban, Node.js/Express, and Next.js
 
 1. **Contract unit tests first.** The Soroban contract holds funds on-chain and enforces invariants that cannot be patched after deployment. Every public entrypoint must have at least one test covering the happy path, every authorization boundary, and every error code. Contract tests run in a deterministic simulated Soroban environment with no network dependency.
 
-2. **API integration tests second.** The Express API connects contract state, PostgreSQL, and business rules. Integration tests run against a real (Docker) PostgreSQL instance so that SQL queries and constraint violations are exercised as they would be in production. Mocking the database is avoided because mock/production divergence has caused silent breakage in the past. Coverage is currently minimal: `apps/api/src/__tests__/integration/bonds.test.ts` verifies a bond record insert and the `bond_type_code` check-constraint enforcement (issue #747). Auth boundaries, error paths, and happy-path HTTP routes are not yet covered — see "What to Test" below.
+2. **API integration tests second.** The Express API connects contract state, PostgreSQL, and business rules. Database-backed integration tests run against a real (Docker) PostgreSQL instance so that SQL queries and constraint violations are exercised as they would be in production. Mocking the database is avoided because mock/production divergence has caused silent breakage in the past. Route coverage includes health probes, KYC upload authorization, and admin oracle-alerts pagination, alongside the database integration cases — see "What to Test" below.
 
 3. **SDK unit tests third.** The TypeScript SDK wraps Soroban RPC. Its unit tests mock the RPC layer to verify argument serialization, error mapping, and retry logic without requiring a live network.
 
@@ -25,6 +25,7 @@ TariffShield spans three runtimes — Rust/Soroban, Node.js/Express, and Next.js
 | Soroban contract unit tests | `contracts/tariff-shield/src/test.rs` | `cargo test` + `soroban-sdk` testutils | Active (42 tests) |
 | API integration tests | `apps/api/src/__tests__/` | supertest + Jest or Vitest (to be added) | Active — minimal (2 tests in `bonds.test.ts`) |
 | SDK compatibility tests | `packages/sdk/src/compatibility.test.ts` | `tsx --test` (Node built-in test runner) | Active — run with `npm run test --workspace=packages/sdk` |
+| Web unit tests | `apps/web/components/**/*.test.tsx`, `apps/web/lib/**/*.test.ts` | Vitest + Testing Library (jsdom per file) | Active — run with `npm test --workspace=apps/web` |
 | E2E tests | `apps/web/e2e/` | Playwright v1.49, Desktop Chrome | Active (3 specs) |
 
 > **Keeping the contract test count accurate:** the "(N tests)" figure above is a snapshot, not a generated value, so it drifts whenever `test.rs` gains or loses `#[test]` functions. Verify it before relying on it:
@@ -42,7 +43,8 @@ TariffShield spans three runtimes — Rust/Soroban, Node.js/Express, and Next.js
 | `contracts/tariff-shield` | `cargo test` | Rust `assert_eq!` / `assert!` | Soroban test env (in-process simulation) | N/A | `cargo llvm-cov` (not yet configured) |
 | `apps/api` | `node:test` (built-in) | `node:assert/strict` | None — direct `pg` `Pool` queries, no HTTP layer | Docker PostgreSQL (matches production schema) | Not yet configured |
 | `packages/sdk` | `tsx --test` (Node built-in test runner) | Node built-in `assert` | N/A — compatibility tests exercise version detection logic | N/A | Not yet configured |
-| `apps/web` | Playwright v1.49 | Playwright assertions | Real API on localhost | N/A | Playwright trace files |
+| `apps/web` (unit) | Vitest | Vitest `expect` / `node:assert/strict` | None — components rendered with Testing Library in jsdom | N/A | `@vitest/coverage-v8` (text + html) |
+| `apps/web` (e2e) | Playwright v1.49 | Playwright assertions | Real API on localhost | N/A | Playwright trace files |
 
 ---
 
@@ -68,6 +70,23 @@ npm run contract:test
 cargo test --manifest-path contracts/tariff-shield/Cargo.toml
 ```
 
+### Web unit tests (Vitest)
+```bash
+# From apps/web/
+npm test                # vitest run — component and lib unit tests, single pass
+npm run test:watch      # vitest in watch mode
+npm run test:coverage   # vitest run --coverage — fails if coverage drops below the thresholds
+
+# Equivalent (from repo root)
+npm test --workspace=apps/web
+```
+
+`apps/web/vitest.config.ts` only collects `components/**/*.test.{ts,tsx}` and `lib/**/*.test.{ts,tsx}` and explicitly excludes `e2e/`, so it never picks up Playwright specs. Component tests opt into a DOM with a `// @vitest-environment jsdom` docblock; everything else runs in Node.
+
+The `@/` import alias is derived from `compilerOptions.paths["@/*"]` in `apps/web/tsconfig.json` rather than duplicated, so Vitest, `tsc` and Next.js always resolve `@/lib/...` and `@/components/...` to the same files. `lib/vitest-config.test.ts` fails if the two ever drift.
+
+Coverage thresholds (lines/statements/branches/functions) live in `vitest.config.ts` `test.coverage.thresholds`. They start at a low baseline for the new suite — raise them in the same PR that adds tests.
+
 ### E2E tests
 ```bash
 # From apps/web/
@@ -76,6 +95,8 @@ npm run test:e2e
 # With trace on failure (CI mode)
 npx playwright test --reporter=html
 ```
+
+`apps/web/playwright.config.ts` sets `testDir: './e2e'`, so Playwright never runs Vitest files. Neither runner starts a server or binds a port (Playwright targets `PLAYWRIGHT_BASE_URL`, default `http://localhost:3000`, which you start yourself), so `npm test && npm run test:e2e` can run back to back in one shell.
 
 ### API integration tests
 ```bash
@@ -101,6 +122,9 @@ After running tests with coverage:
 # API / SDK
 open coverage/index.html
 
+# Web unit tests (after npm run test:coverage in apps/web)
+open apps/web/coverage/index.html
+
 # Playwright report
 open apps/web/playwright-report/index.html
 ```
@@ -124,6 +148,11 @@ open apps/web/playwright-report/index.html
 - **Input validation:** send bodies with missing required fields, wrong types, and values outside the allowed enum; expect `400`.
 - **Error paths:** importer not found (`404`), email conflict (`409`), OFAC hit (`403`), KYC gating (`403`), CBP deviation (`422`).
 - **Happy paths:** successful signup + login, register importer, deposit collateral, upload tariff CSV.
+- **Health probes:** `/health/live` stays 200 plain-text `OK` without calling dependencies; `/health/ready` returns plain-text `503 Service Unavailable` when any DB, Soroban, or Redis ping fails, and `200 OK` when all succeed.
+- **KYC uploads:** a surety-admin upload is rejected with 403 and inserts no row; an importer can upload to their own importer id, but receives 404 for another importer's id.
+- **Admin oracle alerts:** GET /admin/oracle-alerts enforces surety-admin-only access (403 'surety admin only' for importer), returns alerts ordered by alerted_at DESC with a total count, clamps limits > 100 to 100, and returns an empty alerts array with the correct total when offset exceeds row count; PATCH /admin/oracle-alerts/:id/acknowledge enforces surety_admin-only access (403 without running update), returns 404 for unknown alert IDs, and returns 200 with updated acknowledged_at timestamp.
+- **Admin privacy policy:** POST /admin/privacy-policy/publish returns 201 with the new version row, flags all importer and surety_admin users when requiresReacceptance is true, leaves flags untouched when false, and validates changeSummary min length (400).
+- **Admin HTS cache refresh:** POST /admin/refresh-hts-cache busts only specified HTS codes when provided, clears the full cache when omitted or empty, reports matching deletedRows, and rejects importer tokens with 403 prior to cache mutation.
 - **Rate limit mapping:** when the contract client throws an error containing `Error(Contract, #13)`, the route must respond `429` with `Retry-After`.
 
 ### SDK methods (`packages/sdk/src/__tests__/`)

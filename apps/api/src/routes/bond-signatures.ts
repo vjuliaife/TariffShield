@@ -229,7 +229,7 @@ bondSignaturesRouter.post(
   requireRole('surety_admin'),
   async (req: Request, res: Response) => {
     const bondRecordId = req.params.id!;
-    const sig = await pool.query(
+    const sig = await pool.query<{ id: string; envelope_id: string; created_at: Date }>(
       `SELECT id, envelope_id, status, created_at, last_reminder_sent_at
        FROM bond_signatures WHERE bond_record_id = $1 AND status = 'sent'
        ORDER BY created_at DESC LIMIT 1`,
@@ -241,6 +241,11 @@ bondSignaturesRouter.post(
     }
 
     const envelope = sig.rows[0]!;
+    if (Date.now() - new Date(envelope.created_at).getTime() >= 72 * 60 * 60 * 1000) {
+      res.status(410).json({ error: 'signing deadline passed; void and reissue this envelope' });
+      return;
+    }
+
     await pool.query(
       'UPDATE bond_signatures SET last_reminder_sent_at = now() WHERE id = $1',
       [envelope.id]
