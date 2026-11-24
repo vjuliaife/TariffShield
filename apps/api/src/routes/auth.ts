@@ -451,6 +451,9 @@ authRouter.post('/saml/:provider/callback', async (req: Request, res: Response) 
   // Production: replace with passport-saml Strategy.verify() for full signature validation.
   let decoded: string;
   try {
+    if (!/^[A-Za-z0-9+/=\r\n]+$/.test(samlResponse) || samlResponse.trim().length === 0) {
+      throw new Error('invalid-base64');
+    }
     decoded = Buffer.from(samlResponse, 'base64').toString('utf8');
   } catch {
     res.status(400).json({ error: 'malformed SAMLResponse' });

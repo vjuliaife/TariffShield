@@ -12,7 +12,7 @@ Every protected route expects a JSON Web Token in the `Authorization` header:
 Authorization: Bearer <token>
 ```
 
-The token is a signed JWT issued by the TariffShield auth service. It encodes the caller's user ID and role, and expires after a short window (typically 15 minutes). See [Token acquisition](#token-acquisition) for how to obtain one.
+The token is a signed JWT issued by the TariffShield auth service. It encodes the caller's user ID, role and session ID. The JWT itself expires after 7 days, but its session ends after 15 minutes without an authenticated request. See [Token acquisition](#token-acquisition) for how to obtain one, and [auth.md](./auth.md#token-lifecycle) for the full token lifecycle.
 
 ### API key alternative
 
@@ -125,6 +125,7 @@ After the IdP callback the API issues the same JWT pair as above.
 
 ## Related docs
 
+- [Auth API: signup, login, refresh, logout](./auth.md)
 - [API Error Codes](./error-codes.md)
 - [Postman Guide](./postman-guide.md)
 - [SDK Network Configuration](../guides/sdk-network-config.md)
