@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, within } from '@testing-library/react';
-import { fireEvent } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import type { ContractEvent } from '@/lib/api';
 import { BondTimeline } from '../BondTimeline';
 
@@ -90,7 +89,6 @@ describe('BondTimeline calendar', () => {
     const { container } = render(<BondTimeline events={events} importerId="imp-1" />);
 
     expect(screen.getByText('September 2026')).toBeTruthy();
-    expect(screen.getByRole('button', { name: '→' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: '→' }));
     expect(screen.getByText('October 2026')).toBeTruthy();
     expect(screen.getByText('october')).toBeTruthy();
@@ -120,5 +118,56 @@ describe('BondTimeline calendar', () => {
     expect(screen.getByText('january')).toBeTruthy();
     expect(screen.queryByText('december')).toBeNull();
     expect(dayCells(container).length % 7).toBe(0);
+  });
+
+  it('maps event kinds to their color classes on day-cell chips', () => {
+    const cases = [
+      ['deposit', 'bg-accent/20 text-accent'],
+      ['yield', 'bg-success/20 text-success'],
+      ['accrue', 'bg-success/20 text-success'],
+      ['clawback', 'bg-danger/20 text-danger'],
+      ['top-up', 'bg-yellow-500/20 text-yellow-600'],
+      ['topup', 'bg-yellow-500/20 text-yellow-600'],
+      ['auto_top-up_reserve', 'bg-yellow-500/20 text-yellow-600'],
+      ['unknown_action', 'bg-muted/20 text-muted'],
+    ] as const;
+    const events = cases.map(([kind], index) =>
+      monthEvent(`color-${index}`, kind, 8, index + 1),
+    );
+
+    render(<BondTimeline events={events} importerId="imp-1" />);
+
+    for (const [kind, colorClass] of cases) {
+      const chip = screen.getByTitle(`${kind} — click to view annotations`);
+      expect(chip.tagName).toBe('BUTTON');
+      expect(chip.closest('.min-h-20')).toBeTruthy();
+      expect(chip.className).toContain(colorClass);
+    }
+  });
+
+  it('groups events on their createdAt calendar day, including just before midnight', () => {
+    const beforeMidnight = makeEvent(
+      'before-midnight',
+      'before_midnight',
+      new Date(2026, 8, 10, 23, 59, 59),
+    );
+    const events = [
+      monthEvent('early', 'early_event', 8, 5),
+      beforeMidnight,
+      monthEvent('late', 'late_event', 8, 20),
+    ];
+    const { container } = render(<BondTimeline events={events} importerId="imp-1" />);
+
+    for (const [kind, day] of [
+      ['early_event', 5],
+      ['before_midnight', 10],
+      ['late_event', 20],
+    ] as const) {
+      const eventChip = screen.getByTitle(`${kind} — click to view annotations`);
+      expect(eventChip.closest('.min-h-20')).toBe(cellForDay(container, day));
+    }
+
+    expect(cellForDay(container, 11)?.querySelectorAll('button')).toHaveLength(0);
+    expect(cellForDay(container, 12)?.querySelectorAll('button')).toHaveLength(0);
   });
 });

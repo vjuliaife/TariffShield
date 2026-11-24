@@ -46,9 +46,10 @@ export default defineConfig({
     jsx: 'automatic',
   },
   test: {
-    environment: 'node',
+    environment: 'jsdom',
     include: unitTestInclude,
     exclude: [...configDefaults.exclude, 'e2e/**', '.next/**', 'playwright-report/**'],
+    setupFiles: ['./test/setup.ts'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],
