@@ -106,6 +106,9 @@ importersRouter.post('/', async (req: Request, res: Response) => {
     principalEin: ein,
     bondTypeCode: '02',
     bondAmount: BigInt(initialRequiredCollateral),
+    suretyCompanyName: 'TBD',
+    suretyFein: '00-0000000',
+    effectiveDate: new Date(),
   });
 
   if (!bondValidation.valid) {
