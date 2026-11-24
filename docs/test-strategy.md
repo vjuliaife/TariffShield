@@ -10,7 +10,7 @@ TariffShield spans three runtimes — Rust/Soroban, Node.js/Express, and Next.js
 
 1. **Contract unit tests first.** The Soroban contract holds funds on-chain and enforces invariants that cannot be patched after deployment. Every public entrypoint must have at least one test covering the happy path, every authorization boundary, and every error code. Contract tests run in a deterministic simulated Soroban environment with no network dependency.
 
-2. **API integration tests second.** The Express API connects contract state, PostgreSQL, and business rules. Database-backed integration tests run against a real (Docker) PostgreSQL instance so that SQL queries and constraint violations are exercised as they would be in production. Mocking the database is avoided because mock/production divergence has caused silent breakage in the past. Route coverage includes health probes and KYC upload authorization, alongside the database integration cases — see "What to Test" below.
+2. **API integration tests second.** The Express API connects contract state, PostgreSQL, and business rules. Database-backed integration tests run against a real (Docker) PostgreSQL instance so that SQL queries and constraint violations are exercised as they would be in production. Mocking the database is avoided because mock/production divergence has caused silent breakage in the past. Route coverage includes health probes, KYC upload authorization, and admin oracle-alerts pagination, alongside the database integration cases — see "What to Test" below.
 
 3. **SDK unit tests third.** The TypeScript SDK wraps Soroban RPC. Its unit tests mock the RPC layer to verify argument serialization, error mapping, and retry logic without requiring a live network.
 
@@ -150,6 +150,9 @@ open apps/web/playwright-report/index.html
 - **Happy paths:** successful signup + login, register importer, deposit collateral, upload tariff CSV.
 - **Health probes:** `/health/live` stays 200 plain-text `OK` without calling dependencies; `/health/ready` returns plain-text `503 Service Unavailable` when any DB, Soroban, or Redis ping fails, and `200 OK` when all succeed.
 - **KYC uploads:** a surety-admin upload is rejected with 403 and inserts no row; an importer can upload to their own importer id, but receives 404 for another importer's id.
+- **Admin oracle alerts:** GET /admin/oracle-alerts enforces surety-admin-only access (403 'surety admin only' for importer), returns alerts ordered by alerted_at DESC with a total count, clamps limits > 100 to 100, and returns an empty alerts array with the correct total when offset exceeds row count; PATCH /admin/oracle-alerts/:id/acknowledge enforces surety_admin-only access (403 without running update), returns 404 for unknown alert IDs, and returns 200 with updated acknowledged_at timestamp.
+- **Admin privacy policy:** POST /admin/privacy-policy/publish returns 201 with the new version row, flags all importer and surety_admin users when requiresReacceptance is true, leaves flags untouched when false, and validates changeSummary min length (400).
+- **Admin HTS cache refresh:** POST /admin/refresh-hts-cache busts only specified HTS codes when provided, clears the full cache when omitted or empty, reports matching deletedRows, and rejects importer tokens with 403 prior to cache mutation.
 - **Rate limit mapping:** when the contract client throws an error containing `Error(Contract, #13)`, the route must respond `429` with `Retry-After`.
 
 ### SDK methods (`packages/sdk/src/__tests__/`)
