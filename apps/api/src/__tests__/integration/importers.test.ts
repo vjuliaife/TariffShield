@@ -2,6 +2,7 @@
  * Integration test suite for POST /importers registration pipeline.
  *
  * Covers:
+ * - #580: Blocks OFAC-Flagged Legal Names with 403 (before duplicate check, no DB rows; non-flagged succeeds)
  * - #582: Blocks High-Risk AML Wallet Screening Results (403, no on-chain call, no DB row; LOW/MEDIUM proceeds)
  * - #581: Returns 409 for duplicate registration by the same user (exactly 1 DB row; distinct user succeeds)
  * - #583: Returns 422 for CBP Form 301 validation failures (minimum required match, no DB row; valid inputs succeed)
@@ -391,6 +392,92 @@ describe('POST /importers integration suite (#581, #582, #583, #584)', () => {
 
   beforeEach(() => {
     registerImporterCalls = [];
+  });
+
+  // =========================================================================
+  // #580: Blocks OFAC-Flagged Legal Names with 403
+  // =========================================================================
+  describe('Issue #580 — POST /importers OFAC sanctions screening', () => {
+    it('blocks OFAC-flagged legal names with 403, writes no DB rows, and precedes duplicate check', async () => {
+      const user = await createTestUser('ofac-flagged');
+      const minRequired = calculateMinimumBondAmount('02');
+      const bondId = 8201;
+      const flaggedLegalName = 'Sanctioned Logistics International LLC';
+      const cleanLegalName = 'Compliant Logistics International LLC';
+      const ein = '11-1111111';
+
+      // 1. OFAC-flagged legalName+ein returns 403 with 'Importer failed OFAC sanctions screening'
+      const flaggedRes = await postImporter(user.token, {
+        legalName: flaggedLegalName,
+        ein,
+        bondId,
+        initialRequiredCollateral: minRequired.toString(),
+        businessState: 'CA',
+      });
+
+      assert.strictEqual(flaggedRes.status, 403, 'OFAC-flagged legalName must return HTTP 403');
+      assert.strictEqual(
+        flaggedRes.body?.error,
+        'Importer failed OFAC sanctions screening',
+        'Error message must match "Importer failed OFAC sanctions screening"'
+      );
+
+      // 2. No importers row or bond_records row exists after the rejected call
+      let importerCount = 0;
+      let bondCount = 0;
+      if (dbAvailable) {
+        const impCheck = await pool.query<{ count: string }>(
+          'SELECT count(*) AS count FROM importers WHERE user_id = $1',
+          [user.id]
+        );
+        importerCount = Number(impCheck.rows[0]!.count);
+        const bondCheck = await pool.query<{ count: string }>(
+          'SELECT count(*) AS count FROM bond_records WHERE principal_legal_name = $1',
+          [flaggedLegalName]
+        );
+        bondCount = Number(bondCheck.rows[0]!.count);
+      } else {
+        importerCount = mockImporters.filter((i) => i.user_id === user.id).length;
+        bondCount = mockBondRecords.filter((b) => b.principal_legal_name === flaggedLegalName).length;
+      }
+      assert.strictEqual(importerCount, 0, 'No importers row should exist after rejected call');
+      assert.strictEqual(bondCount, 0, 'No bond_records row should exist after rejected call');
+
+      // 3. A non-flagged legalName with identical other fields succeeds
+      const cleanRes = await postImporter(user.token, {
+        legalName: cleanLegalName,
+        ein,
+        bondId,
+        initialRequiredCollateral: minRequired.toString(),
+        businessState: 'CA',
+      });
+
+      assert.strictEqual(cleanRes.status, 200, 'Non-flagged legalName must succeed with HTTP 200');
+      assert.ok(cleanRes.body?.importer?.id, 'Successful registration must return importer id');
+
+      // 4. The rejection happens before the duplicate-registration check runs
+      // User now has an existing importer registered.
+      // Submitting an OFAC-flagged legalName should still return 403 (OFAC screening failure),
+      // NOT 409 (importer already registered for this user).
+      const dupFlaggedRes = await postImporter(user.token, {
+        legalName: flaggedLegalName,
+        ein,
+        bondId: bondId + 1,
+        initialRequiredCollateral: minRequired.toString(),
+        businessState: 'CA',
+      });
+
+      assert.strictEqual(
+        dupFlaggedRes.status,
+        403,
+        'OFAC check must precede duplicate-registration check (expected 403, not 409)'
+      );
+      assert.strictEqual(
+        dupFlaggedRes.body?.error,
+        'Importer failed OFAC sanctions screening',
+        'Should return OFAC screening error rather than duplicate registration error'
+      );
+    });
   });
 
   // =========================================================================

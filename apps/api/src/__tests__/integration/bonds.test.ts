@@ -815,4 +815,97 @@ describe('bonds integration — real Postgres insert', () => {
       }
     }
   });
+
+  // #607 — POST /bonds/docusign-webhook marks signature completed and stores a document hash
+  it('POST /bonds/docusign-webhook marks signature completed, stores sha256 document hash, and updates bond_records', async (t) => {
+    if (!dbAvailable) return t?.skip('Database not available in this environment');
+
+    const testBondIdWebhook = testBondId + 6;
+    const bondInsert = await pool.query<{ id: string }>(
+      `INSERT INTO bond_records
+         (importer_id, bond_id, bond_type_code, principal_legal_name, principal_ein,
+          surety_company_name, surety_fein, bond_amount, cbp_minimum_required, effective_date, signature_status)
+       VALUES ($1, $2, '02', 'Integration Test Corp', '12-3456789', 'Test Surety Company', '98-7654321', 500000, 100000, CURRENT_DATE, 'sent')
+       RETURNING id`,
+      [importerId, testBondIdWebhook]
+    );
+    const bondRecordId = bondInsert.rows[0]!.id;
+
+    const webhookEnvId = `ENV-WEBHOOK-607-${testTag}-${randomUUID().slice(0, 4)}`;
+    await pool.query(
+      `INSERT INTO bond_signatures (bond_record_id, envelope_id, signing_url, status)
+       VALUES ($1, $2, 'https://demo.docusign.net/webhook-607', 'sent')`,
+      [bondRecordId, webhookEnvId]
+    );
+
+    // 1. Missing envelopeId or status in the payload returns 400 before any update
+    const missingEnvPayload = { status: 'completed' };
+    const missingEnvRes = await postWebhook(
+      missingEnvPayload,
+      Buffer.from(JSON.stringify(missingEnvPayload))
+    );
+    assert.strictEqual(missingEnvRes.statusCode, 400, 'missing envelopeId should return 400');
+    assert.strictEqual((missingEnvRes.body as any)?.error, 'missing envelopeId or status');
+
+    const missingStatusPayload = { envelopeId: webhookEnvId };
+    const missingStatusRes = await postWebhook(
+      missingStatusPayload,
+      Buffer.from(JSON.stringify(missingStatusPayload))
+    );
+    assert.strictEqual(missingStatusRes.statusCode, 400, 'missing status should return 400');
+    assert.strictEqual((missingStatusRes.body as any)?.error, 'missing envelopeId or status');
+
+    // Verify no updates occurred during 400 calls
+    const sigCheckBefore = await pool.query<{ status: string; completed_at: Date | null }>(
+      'SELECT status, completed_at FROM bond_signatures WHERE envelope_id = $1',
+      [webhookEnvId]
+    );
+    assert.strictEqual(sigCheckBefore.rows[0]!.status, 'sent', 'status must remain sent after 400 errors');
+    assert.strictEqual(sigCheckBefore.rows[0]!.completed_at, null, 'completed_at must remain null after 400 errors');
+
+    // 2. Valid completed-status webhook payload
+    const payload = {
+      envelopeId: webhookEnvId,
+      status: 'completed',
+      event: 'envelope-completed',
+      timestamp: new Date().toISOString(),
+    };
+    const rawBody = Buffer.from(JSON.stringify(payload));
+    const expectedHash = crypto.createHash('sha256').update(rawBody).digest('hex');
+
+    const completedRes = await postWebhook(payload, rawBody);
+    assert.strictEqual(completedRes.statusCode, 200, 'valid completed webhook must return 200');
+    assert.strictEqual((completedRes.body as any)?.received, true);
+
+    // 3. Verify bond_signatures.status is updated to 'completed' with completed_at set
+    // and signed_document_hash is 64-character hex sha256 digest of rawBody
+    const sigCheckAfter = await pool.query<{
+      status: string;
+      signed_document_hash: string | null;
+      completed_at: Date | null;
+    }>(
+      'SELECT status, signed_document_hash, completed_at FROM bond_signatures WHERE envelope_id = $1',
+      [webhookEnvId]
+    );
+    assert.strictEqual(sigCheckAfter.rows[0]!.status, 'completed', 'status must be updated to completed');
+    assert.ok(
+      sigCheckAfter.rows[0]!.completed_at instanceof Date ||
+        typeof sigCheckAfter.rows[0]!.completed_at === 'string',
+      'completed_at must be populated'
+    );
+    assert.strictEqual(sigCheckAfter.rows[0]!.signed_document_hash, expectedHash);
+    assert.strictEqual(sigCheckAfter.rows[0]!.signed_document_hash?.length, 64);
+    assert.match(sigCheckAfter.rows[0]!.signed_document_hash!, /^[0-9a-f]{64}$/);
+
+    // 4. Verify linked bond_records row's signature_status is updated to 'completed'
+    const bondCheckAfter = await pool.query<{ signature_status: string }>(
+      'SELECT signature_status FROM bond_records WHERE id = $1',
+      [bondRecordId]
+    );
+    assert.strictEqual(
+      bondCheckAfter.rows[0]!.signature_status,
+      'completed',
+      'linked bond_records signature_status must be updated to completed'
+    );
+  });
 });
