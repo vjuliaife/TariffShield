@@ -24,7 +24,7 @@ export function registerUser(role) {
 
   const signupRes = http.post(
     `${BASE_URL}/auth/signup`,
-    JSON.stringify({ email, password, role }),
+    JSON.stringify({ email, password, role, accept_tos: true }),
     jsonHeaders()
   );
   check(signupRes, { 'signup succeeded': (r) => r.status === 200 || r.status === 201 });
