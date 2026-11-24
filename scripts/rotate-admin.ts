@@ -17,10 +17,20 @@
  *   --dry-run       Simulate the transaction and print the XDR; do not broadcast.
  *   --new-secret    Provide an existing secret instead of generating a fresh one.
  *   --show-secret   Print the raw secret key to stdout (use only in secure,
- *                   non-logged terminals; never use in CI).
+ *                   non-logged terminals; never use in CI). Requires an
+ *                   interactive confirmation (see below).
+ *   --yes, -y       Skip the --show-secret confirmation prompt. Explicit opt-in
+ *                   for legitimate scripted use; never implied by default.
+ *
+ * --show-secret confirmation gate:
+ *   When --show-secret is passed, the script restates the risk and asks you to
+ *   type "yes" before printing the raw key. Anything else aborts the print (the
+ *   rotation itself is unaffected and the key file is still written). With no
+ *   TTY attached and no --yes, the secret is NOT printed. See
+ *   resolveShowSecret().
  *
  * Usage:
- *   npx ts-node scripts/rotate-admin.ts [--dry-run] [--new-secret SXXX...] [--show-secret]
+ *   npx ts-node scripts/rotate-admin.ts [--dry-run] [--new-secret SXXX...] [--show-secret [--yes]]
  *
  * SECURITY NOTE: Do not add --show-secret to any CI/CD pipeline invocation.
  * This script may run in automated contexts where stdout is captured in logs.
@@ -29,6 +39,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
+import * as readline from "readline";
 import {
   Keypair,
   Networks,
@@ -41,13 +52,51 @@ import {
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
-export function parseArgs(): { dryRun: boolean; newSecret: string | null; showSecret: boolean } {
-  const args = process.argv.slice(2);
+export function parseArgs(argv: string[] = process.argv.slice(2)): {
+  dryRun: boolean;
+  newSecret: string | null;
+  showSecret: boolean;
+  yes: boolean;
+} {
+  const args = argv;
   const dryRun = args.includes("--dry-run");
   const showSecret = args.includes("--show-secret");
+  const yes = args.includes("--yes") || args.includes("-y");
   const nsIdx = args.indexOf("--new-secret");
   const newSecret = nsIdx !== -1 ? (args[nsIdx + 1] ?? null) : null;
-  return { dryRun, newSecret, showSecret };
+  return { dryRun, newSecret, showSecret, yes };
+}
+
+export const SHOW_SECRET_WARNING =
+  "⚠️  --show-secret will print the RAW admin secret key to this terminal.\n" +
+  "   It will remain in scrollback and any terminal/session logging. Never do this in CI\n" +
+  "   or on a shared/recorded screen.";
+
+/**
+ * Decide whether the raw secret may be printed for --show-secret.
+ *  - --yes/-y skips the prompt (explicit opt-in for scripted use).
+ *  - Without --yes and without a TTY there is nobody to confirm, so refuse.
+ *  - Otherwise ask; only an answer of "yes"/"y" (case-insensitive) confirms.
+ */
+export async function resolveShowSecret(opts: {
+  yes: boolean;
+  isTTY: boolean;
+  prompt: (question: string) => Promise<string>;
+}): Promise<boolean> {
+  if (opts.yes) return true;
+  if (!opts.isTTY) return false;
+  const answer = await opts.prompt('Type "yes" to print the raw secret key, anything else to abort: ');
+  return ["yes", "y"].includes(answer.trim().toLowerCase());
+}
+
+function promptStdin(question: string): Promise<string> {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) =>
+    rl.question(question, (answer) => {
+      rl.close();
+      resolve(answer);
+    }),
+  );
 }
 
 /** Mask a Stellar secret key for safe display: show class prefix + first 4 chars then asterisks. */
@@ -291,7 +340,7 @@ export async function updateVercelSecret(newSecret: string, projectName: string)
 // ─── main ─────────────────────────────────────────────────────────────────────
 
 async function main() {
-  const { dryRun, newSecret: providedNewSecret, showSecret } = parseArgs();
+  const { dryRun, newSecret: providedNewSecret, showSecret, yes } = parseArgs();
 
   // Required env vars
   const currentSecret = require_env("PLATFORM_STELLAR_SECRET");
@@ -414,8 +463,19 @@ async function main() {
 `);
 
   if (showSecret) {
-    console.warn("⚠️  --show-secret flag is set. Raw secret (do not copy into CI logs):");
-    console.log(`  New admin secret key: ${newAdmin.secret()}`);
+    console.warn(`\n${SHOW_SECRET_WARNING}`);
+    const confirmed = await resolveShowSecret({
+      yes,
+      isTTY: Boolean(process.stdin.isTTY && process.stdout.isTTY),
+      prompt: promptStdin,
+    });
+    if (confirmed) {
+      console.log(`  New admin secret key: ${newAdmin.secret()}`);
+    } else {
+      console.warn(
+        `  Not printing the secret (not confirmed, or no TTY and no --yes). Read it from ${secretFilePath}.`,
+      );
+    }
   }
 }
 

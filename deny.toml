@@ -12,6 +12,15 @@ db-urls = ["https://github.com/RustSec/advisory-db"]
 ignore = [
     "RUSTSEC-2024-0388", # derivative is unmaintained (via ark-ec/ark-ff/ark-poly)
     "RUSTSEC-2024-0436", # paste is unmaintained (via ark-ff/wasmi_core)
+    # crypto-bigint: multiple timing variability issues in operations meant to be
+    # constant-time. Fixed only in crypto-bigint >= 0.7.6, but this tree resolves 0.5.5
+    # through soroban-env-host -> k256/p256 -> ecdsa -> elliptic-curve 0.13, which requires
+    # ^0.5, so no compatible fixed version exists (0.5.6 is still affected). soroban-sdk
+    # depends on soroban-env-host only for cfg(not(target_family = "wasm")) and on
+    # soroban-env-guest for wasm, so the crate is built for host tooling/tests and is not
+    # part of the deployed contract. Revisit when soroban-sdk moves its crypto stack to
+    # crypto-bigint >= 0.7.6.
+    "RUSTSEC-2026-0387",
 ]
 
 [licenses]

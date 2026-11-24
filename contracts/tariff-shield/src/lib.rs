@@ -104,6 +104,8 @@ pub struct Account {
     pub dispute_raised: bool,
     /// Ledger timestamp when the oracle last updated the requirement.
     pub oracle_last_updated: u64,
+    /// Flag indicating if this is a trial/sandbox mode account (#1024).
+    pub is_sandbox: bool,
 }
 
 #[contractimpl]
@@ -210,6 +212,21 @@ impl TariffShieldContract {
     ///   --required_collateral 1000000000
     /// ```
     pub fn register_importer(env: Env, importer: Address, bond_id: u64, required_collateral: i128) {
+        Self::register_importer_internal(env, importer, bond_id, required_collateral, false);
+    }
+
+    /// Registers a new importer in trial/sandbox mode (#1024).
+    pub fn register_sandbox_importer(env: Env, importer: Address, bond_id: u64, required_collateral: i128) {
+        Self::register_importer_internal(env, importer, bond_id, required_collateral, true);
+    }
+
+    fn register_importer_internal(
+        env: Env,
+        importer: Address,
+        bond_id: u64,
+        required_collateral: i128,
+        is_sandbox: bool,
+    ) {
         let admin = get_admin(&env);
         admin.require_auth();
         if required_collateral < 0 {
@@ -234,6 +251,7 @@ impl TariffShieldContract {
             pre_dispute_required: required_collateral,
             dispute_raised: false,
             oracle_last_updated: 0,
+            is_sandbox,
         };
         env.storage().persistent().set(&key, &account);
         env.events().publish(
@@ -282,12 +300,14 @@ impl TariffShieldContract {
         let mut acct = load_account(&env, &importer);
         require_active(&env, &acct);
         require_fresh_collateral(&env, &importer, &acct);
-        let token_addr = get_token(&env);
-        token::Client::new(&env, &token_addr).transfer(
-            &from,
-            &env.current_contract_address(),
-            &amount,
-        );
+        if !acct.is_sandbox {
+            let token_addr = get_token(&env);
+            token::Client::new(&env, &token_addr).transfer(
+                &from,
+                &env.current_contract_address(),
+                &amount,
+            );
+        }
         acct.collateral_balance += amount;
         save_account(&env, &importer, &acct);
         env.events().publish(
@@ -336,12 +356,14 @@ impl TariffShieldContract {
         let mut acct = load_account(&env, &importer);
         require_active(&env, &acct);
         require_fresh_collateral(&env, &importer, &acct);
-        let token_addr = get_token(&env);
-        token::Client::new(&env, &token_addr).transfer(
-            &from,
-            &env.current_contract_address(),
-            &amount,
-        );
+        if !acct.is_sandbox {
+            let token_addr = get_token(&env);
+            token::Client::new(&env, &token_addr).transfer(
+                &from,
+                &env.current_contract_address(),
+                &amount,
+            );
+        }
         acct.reserve_balance += amount;
         save_account(&env, &importer, &acct);
         env.events().publish(
@@ -660,17 +682,38 @@ impl TariffShieldContract {
         if amount > excess {
             panic_with_error!(&env, Error::CollateralBelowRequired);
         }
-        let token_addr = get_token(&env);
-        token::Client::new(&env, &token_addr).transfer(
-            &env.current_contract_address(),
-            &to,
-            &amount,
-        );
+        if !acct.is_sandbox {
+            let token_addr = get_token(&env);
+            token::Client::new(&env, &token_addr).transfer(
+                &env.current_contract_address(),
+                &to,
+                &amount,
+            );
+        }
         acct.collateral_balance -= amount;
         save_account(&env, &importer, &acct);
         env.events().publish(
             (symbol_short!("withdraw"), importer.clone()),
             (amount, acct.collateral_balance),
+        );
+    }
+
+    /// Converts a trial/sandbox account to a live production account (#1024).
+    /// Resets simulated test balances and enables live SAC token operations.
+    pub fn convert_sandbox_to_live(env: Env, importer: Address) {
+        let admin = get_admin(&env);
+        admin.require_auth();
+        let mut acct = load_account(&env, &importer);
+        if !acct.is_sandbox {
+            return;
+        }
+        acct.is_sandbox = false;
+        acct.collateral_balance = 0;
+        acct.reserve_balance = 0;
+        save_account(&env, &importer, &acct);
+        env.events().publish(
+            (Symbol::new(&env, "ConvertSandboxToLive"), importer.clone()),
+            acct.bond_id,
         );
     }
 

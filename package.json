@@ -22,23 +22,32 @@
     "contract:deploy": "tsx scripts/deploy-contracts.ts",
     "seed": "tsx scripts/seed.ts",
     "e2e": "tsx scripts/e2e.ts",
+    "sdk-smoke": "tsx scripts/sdk-smoke.ts",
+    "test:regulatory-report": "tsx scripts/test-regulatory-report.ts",
     "admin": "tsx scripts/admin.ts",
     "upgrade": "tsx scripts/upgrade.ts",
     "setup-env": "tsx scripts/setup-env.ts",
+    "check:env-example": "tsx scripts/check-env-example-sync.ts",
+    "sync:env-example": "tsx scripts/check-env-example-sync.ts --write",
     "dep-graph": "tsx scripts/dep-graph.ts",
+    "check:dep-graph": "tsx scripts/check-dep-graph.ts",
     "backup-state": "tsx scripts/backup-state.ts",
     "verify-upgrade": "tsx scripts/verify-upgrade.ts",
     "rollback-upgrade": "tsx scripts/rollback-upgrade.ts",
     "list-wasm-hashes": "tsx scripts/list-wasm-hashes.ts",
     "test:scripts": "tsx --test --test-force-exit scripts/__tests__/*.test.ts",
+    "check:toolchain": "tsx scripts/check-toolchain-alignment.ts",
     "changelog": "conventional-changelog -p angular -i CHANGELOG.md -s",
     "generate:types": "openapi-typescript docs/security/openapi.yaml -o packages/api-types/index.ts",
     "watch:contracts": "cd contracts/tariff-shield && cargo watch -x test -w src/",
-    "prepare": "husky install || true"
+    "prepare": "husky"
   },
   "lint-staged": {
+    "*.rs": [
+      "sh scripts/rustfmt-staged.sh"
+    ],
     "*.{ts,tsx}": [
-      "eslint --fix"
+      "eslint --fix --flag v10_config_lookup_from_file"
     ],
     "*.{ts,tsx,json,yaml,md}": [
       "prettier --write"
@@ -51,49 +60,58 @@
     ]
   },
   "devDependencies": {
-    "@commitlint/cli": "^19.0.0",
-    "@commitlint/config-conventional": "^19.0.0",
-    "@semantic-release/changelog": "^6.0.0",
-    "@semantic-release/exec": "^6.0.0",
+    "@commitlint/cli": "^19.8.1",
+    "@commitlint/config-conventional": "^19.8.1",
+    "@eslint/js": "^9.39.5",
+    "@semantic-release/changelog": "^7.0.0",
+    "@semantic-release/exec": "^7.1.0",
     "@semantic-release/git": "^10.0.0",
     "@semantic-release/github": "^10.0.0",
     "@semantic-release/npm": "^13.1.5",
-    "@typescript-eslint/eslint-plugin": "^7.0.0",
-    "@typescript-eslint/parser": "^7.0.0",
     "concurrently": "^9.2.4",
     "conventional-changelog-cli": "^5.0.0",
-    "eslint": "^8.57.0",
+    "eslint": "^9.39.5",
     "husky": "^8.0.3",
     "lint-staged": "^15.2.0",
-    "openapi-typescript": "^7.0.0",
+    "openapi-typescript": "^7.13.0",
     "prettier": "^3.0.0",
     "semantic-release": "^25.0.8",
     "tsx": "^4.19.0",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.71.1"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.15"
   },
   "dependencies": {
     "commander": "^15.0.0",
-    "lightningcss": "^1.33.0",
-    "lightningcss-darwin-arm64": "^1.33.0"
+    "lightningcss": "^1.33.0"
   },
+  "//": [
+    "overrides.body-parser: ^2.4.0 patches the compressed-request trailing-bytes DoS present in 2.0.0-2.3.0 (pulled in by express).",
+    "overrides.follow-redirects: ^1.16.3 patches the redirect sensitiveHeaders/credential leak present in 1.16.0-1.16.1 (pulled in by axios).",
+    "overrides.axios: @stellar/stellar-sdk pins axios 1.15.0; ^1.20.0 is the first release patching CVE-2026-101898 through CVE-2026-101909 (SSRF, ReDoS, header injection, prototype pollution).",
+    "overrides.postcss: next pins postcss 8.5.23; ^8.5.25 resolves next and @tailwindcss/postcss to one copy above every PostCSS advisory (CVE-2026-41305, CVE-2026-45623, CVE-2026-73646, CVE-2026-69153)."
+  ],
   "overrides": {
     "form-data": "^4.0.6",
     "fast-uri": "^3.1.4",
     "shell-quote": "^1.10.0",
-    "axios": "^1.19.0",
+    "axios": "^1.20.0",
     "postcss": "^8.5.25",
-    "sharp": "^0.35.3",
+    "sharp": "^0.35.5",
     "brace-expansion": "^2.0.2",
     "js-yaml": "^4.1.1",
     "picomatch": "^4.0.3",
     "tar": "^7.5.1",
-    "sigstore": "^3.2.0"
+    "sigstore": "^3.2.0",
+    "toml": "^4.2.0",
+    "body-parser": "^2.4.0",
+    "follow-redirects": "^1.16.3"
   },
   "optionalDependencies": {
     "@tailwindcss/oxide-linux-x64-gnu": "^4.3.3",
+    "lightningcss-darwin-arm64": "^1.33.0",
     "lightningcss-linux-x64-gnu": "^1.33.0"
   }
 }

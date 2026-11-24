@@ -110,5 +110,5 @@ console.log(`Moved ${result.movedStroops} stroops to collateral in tx ${result.t
 You can verify the SDK is configured correctly by running the read-only smoke test script:
 
 ```bash
-npx tsx scripts/sdk-smoke.ts
+npm run sdk-smoke   # from the repo root; same as: npx tsx scripts/sdk-smoke.ts
 ```

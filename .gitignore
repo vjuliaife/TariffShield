@@ -16,8 +16,13 @@ next-env.d.ts
 .env.*.local
 deployments.json
 .vercel
-.vscode
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
 .idea
+
+# Test coverage output (apps/web Vitest, #649)
+coverage/
 
 # Test snapshots
 __snapshots__/

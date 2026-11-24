@@ -1,3 +1,4 @@
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import {
   Address,
   Contract,
@@ -611,16 +612,10 @@ export function verifyWebhookSignature(
   const body = typeof payload === 'string' ? payload : payload.toString('utf8');
   const signedPayload = `${timestampStr}.${body}`;
 
-  // NodeJS / ESM environment HMAC verification
-  if (typeof process !== 'undefined' && process.versions && process.versions.node) {
-    try {
-      const crypto = require('crypto');
-      const expected = crypto.createHmac('sha256', secret).update(signedPayload).digest('hex');
-      return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
-    } catch {}
-  }
-
-  return false;
+  const expected = Buffer.from(createHmac('sha256', secret).update(signedPayload).digest('hex'));
+  const received = Buffer.from(signature);
+  // timingSafeEqual throws on unequal lengths, so the length check must short-circuit first
+  return expected.length === received.length && timingSafeEqual(expected, received);
 }
 
 export {

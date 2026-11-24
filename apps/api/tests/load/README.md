@@ -23,6 +23,8 @@ reproducible performance baseline.
 | `post-deposit.js`        | `POST /importers/:id/deposit`     | < 500ms    | < 0.1%            |
 | `post-withdraw.js`       | `POST /importers/:id/withdraw`    | < 500ms    | < 0.1%            |
 | `post-auto-top-up.js`    | `POST /importers/:id/auto-top-up` | < 500ms    | < 0.1%            |
+| `post-erasure-request.js`| `POST /account/erasure-request`, `GET /account/erasure-request/:requestId` | write < 500ms, read < 200ms | < 0.1% |
+| `post-accept-tos.js`     | `GET /account/tos-history`, `POST /account/accept-tos` | read < 200ms, write < 500ms | < 0.1% |
 
 All targets are measured at 50 concurrent virtual users (`vus: 50`) over a
 1-minute run. Each script's `thresholds` block enforces these targets
@@ -63,7 +65,7 @@ API_BASE_URL=https://staging.tariffshield.example npm run benchmark
 API_BASE_URL=http://localhost:3002 k6 run tests/load/get-importers.js
 ```
 
-`npm run benchmark` runs all five scripts sequentially and writes a JSON
+`npm run benchmark` runs all benchmark scripts sequentially and writes a JSON
 summary per script to `tests/load/results/` (gitignored). It exits non-zero
 if any script's thresholds failed.
 

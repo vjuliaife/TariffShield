@@ -1,4 +1,0 @@
-{
-  "extends": ["tariffshield"],
-  "ignorePatterns": ["dist/**", "node_modules/**"]
-}

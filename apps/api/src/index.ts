@@ -15,6 +15,7 @@ import { importersRouter } from './routes/importers.js';
 import { adminRouter } from './routes/admin.js';
 import { privacyRouter } from './routes/privacy.js';
 import { tosRouter } from './routes/tos.js';
+import { erasureRouter } from './routes/erasure.js';
 import { bondSignaturesRouter, bondWebhookRouter } from './routes/bond-signatures.js';
 import { startIndexer } from './indexer.js';
 import { startReconciliationJob } from './jobs/reconcile-balances.js';
@@ -50,9 +51,7 @@ import { suretyMarketplaceRouter, adminMarketplaceRouter } from './routes/surety
 import { startComplianceEscalation } from './jobs/compliance-escalation.js';
 import { startScheduledComplianceReportDelivery } from './jobs/scheduled-compliance-reports.js';
 import { complianceReportLinksRouter } from './routes/compliance-report-links.js';
-import { startScheduledDepositsJob } from './jobs/scheduled-deposits.js';
-import { startScheduledWithdrawalsJob } from './jobs/scheduled-withdrawals.js';
-import { apiKeysRouter } from './routes/api-keys.js';
+import { importerExperienceRouter } from './routes/importer-experience.js';
 
 const app = express();
 app.use(httpLogger);
@@ -347,6 +346,7 @@ app.use('/compliance-report-links', complianceReportLinksRouter); // unauthentic
 app.use('/admin', adminRouter);
 app.use('/account', privacyRouter);
 app.use('/account', tosRouter);
+app.use(erasureRouter);
 app.use('/account/api-keys', apiKeysRouter);
 app.use('/api/v1/account/api-keys', apiKeysRouter);
 app.use('/privacy', privacyRouter);
@@ -357,6 +357,7 @@ app.use('/bond-annotations', bondAnnotationsRouter);
 app.use('/sla', slaRouter);
 app.use('/developer', developerRouter);
 app.use('/onboarding', onboardingRouter);
+app.use('/importer-experience', importerExperienceRouter);
 app.use('/nps', npsRouter);
 app.use('/report-templates', reportTemplatesRouter);
 app.use('/branding/public', brandingPublicRouter); // unauthenticated, presentation-only

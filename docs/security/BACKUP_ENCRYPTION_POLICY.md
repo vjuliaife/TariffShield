@@ -202,7 +202,9 @@ Quarterly (every 90 days):
 7. Document results in DynamoDB table `backup_drills`
 8. Delete temporary instance
 
-**Script:** See `scripts/backup-restore-drill.sh`
+**Script:** See `scripts/backup-restore-drill.sh` and the
+[backup/restore drill runbook](../runbooks/backup-restore-drill.md) (includes the
+`--dry-run` mode for exercising the drill locally without AWS credentials).
 
 ## Authorization and Responsibilities
 
