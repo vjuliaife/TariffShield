@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import react from '@vitejs/plugin-react';
 import { configDefaults, defineConfig } from 'vitest/config';
 
 const webRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -37,6 +38,7 @@ export function resolveTsconfigAlias(tsconfigPath = path.join(webRoot, 'tsconfig
 export const unitTestInclude = ['components/**/*.test.{ts,tsx}', 'lib/**/*.test.{ts,tsx}'];
 
 export default defineConfig({
+  plugins: [react()],
   resolve: {
     alias: {
       '@': resolveTsconfigAlias(),

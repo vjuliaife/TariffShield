@@ -258,7 +258,8 @@ export function privacyReacceptanceGate(req: Request, res: Response, next: NextF
     return;
   }
 
-  const isExempt = PRIVACY_EXEMPT_PATHS.some((p) => req.path.includes(p));
+  const fullPath = `${req.baseUrl}${req.path}`;
+  const isExempt = PRIVACY_EXEMPT_PATHS.some((p) => fullPath.includes(p) || req.path.includes(p));
   if (isExempt) {
     next();
     return;
@@ -296,7 +297,8 @@ export function tosReacceptanceGate(req: Request, res: Response, next: NextFunct
     return;
   }
 
-  const isExempt = PRIVACY_EXEMPT_PATHS.some((p) => req.path.includes(p));
+  const fullPath = `${req.baseUrl}${req.path}`;
+  const isExempt = PRIVACY_EXEMPT_PATHS.some((p) => fullPath.includes(p) || req.path.includes(p));
   if (isExempt) {
     next();
     return;
