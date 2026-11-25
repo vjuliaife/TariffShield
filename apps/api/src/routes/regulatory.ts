@@ -149,13 +149,19 @@ regulatoryRouter.get('/state-report/:state_code', async (req: Request, res: Resp
     `SELECT COUNT(*)::text as claims_count
      FROM contract_events ce
      JOIN importers i ON ce.importer_id = i.id
-     JOIN bond_records br ON br.importer_id = i.id
      WHERE ce.kind = 'clawback'
-       AND br.state_code = $1
+       AND EXISTS (
+         SELECT 1
+           FROM bond_records br
+          WHERE br.importer_id = i.id
+            AND br.state_code = $1
+            AND br.effective_date >= $2
+            AND br.effective_date <= $3
+            AND COALESCE(br.is_sandbox, false) = false
+       )
        AND ce.created_at >= $2
        AND ce.created_at <= $3
-       AND COALESCE(i.is_sandbox, false) = false
-       AND COALESCE(br.is_sandbox, false) = false`,
+       AND COALESCE(i.is_sandbox, false) = false`,
     [stateCode, startDate, endDate]
   );
   const claimsFiled = parseInt(claimsQuery.rows[0]?.claims_count ?? '0', 10);
@@ -164,12 +170,17 @@ regulatoryRouter.get('/state-report/:state_code', async (req: Request, res: Resp
   const collateralQuery = await pool.query<{ collateral_held: string }>(
     `SELECT COALESCE(SUM(i.collateral_balance), 0)::text as collateral_held
      FROM importers i
-     JOIN bond_records br ON br.importer_id = i.id
-     WHERE br.state_code = $1
-       AND br.effective_date >= $2
-       AND br.effective_date <= $3
+     WHERE EXISTS (
+       SELECT 1
+         FROM bond_records br
+        WHERE br.importer_id = i.id
+          AND br.state_code = $1
+          AND br.effective_date >= $2
+          AND br.effective_date <= $3
+          AND COALESCE(br.is_sandbox, false) = false
+     )
        AND COALESCE(i.is_sandbox, false) = false
-       AND COALESCE(br.is_sandbox, false) = false`,
+    `,
     [stateCode, startDate, endDate]
   );
   const collateralHeld = collateralQuery.rows[0]?.collateral_held ?? '0';

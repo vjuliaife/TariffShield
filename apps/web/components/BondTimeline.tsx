@@ -57,10 +57,6 @@ export function BondTimeline({
       week = [];
     }
     d.setDate(d.getDate() + 1);
-    if (d > lastDay && week.length > 0) {
-      weeks.push(week);
-      break;
-    }
   }
 
   const prevMonth = () => setCurrentMonth(new Date(year, month - 1));

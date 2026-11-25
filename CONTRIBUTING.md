@@ -4,13 +4,30 @@
 
 | Tool                            | Minimum version       | Notes                                                                           |
 | ------------------------------- | --------------------- | ------------------------------------------------------------------------------- |
-| Node.js                         | 20+                   | Pinned via root `package.json` `engines.node`                                   |
+| Node.js                         | 22.15+                | Pinned via root `package.json` `engines.node`                                   |
 | npm                             | 10+                   | Ships with Node 20                                                              |
 | Rust                            | stable (2021 edition) | No strict MSRV pinned — see `Cargo.toml` / `contracts/tariff-shield/Cargo.toml` |
 | `wasm32-unknown-unknown` target | —                     | `rustup target add wasm32-unknown-unknown`                                      |
 | Stellar CLI                     | latest                | https://developers.stellar.org/docs/tools/cli                                   |
 | Docker Desktop                  | latest                | Runs local Postgres via `docker-compose.yml`                                    |
 | PostgreSQL client (`psql`)      | any recent            | For inspecting the local database directly                                      |
+
+### Toolchain alignment
+
+The project runs on **Node 20**: `.nvmrc`, every CI `node-version`, the
+`apps/*/Dockerfile` base images and the devcontainer all use Node 20. Root
+`engines.node` (`>=20`) starts at the same major. `@types/node` in `apps/api`,
+`apps/web` and `packages/sdk` is pinned to `^20.x`, so code cannot type-check
+against Node 22/24 APIs that do not exist at runtime. To move to a newer
+Node, bump all of these together.
+
+The contract's `ed25519-dalek = "2"` dev-dependency pin works around
+soroban-env-host 22.x leaving dalek unbounded. See the comment in
+`contracts/tariff-shield/Cargo.toml`. Remove the pin when soroban-sdk moves
+to a soroban-env-host that bounds dalek itself.
+
+`npm run check:toolchain` checks both of these and fails on drift. The same
+checks run in `npm run test:scripts`.
 
 ## Development Setup
 
@@ -127,8 +144,7 @@ The watch command uses `-w src/` to watch crate source files only, avoiding buil
 | SDK tests | `npm run test --workspace=packages/sdk` (runs `src/compatibility.test.ts` via `tsx --test`) |
 | Operational scripts | `npm run test:scripts` (runs `scripts/__tests__/*.test.ts` via `tsx --test --test-force-exit`; node-only, no external services) |
 | Happy-path e2e smoke | `npm run e2e` — start the API first (`npm run dev:api`), then run from the repo root. Exits non-zero on any step failure. |
-| SDK smoke test (read-only, against the deployed contract in `deployments.json`) | `npm run sdk-smoke` |
-| Regulatory report API check (manual, not in CI; needs the API running) | `npm run test:regulatory-report` — see [docs/compliance/regulatory-report-verification.md](docs/compliance/regulatory-report-verification.md) |
+| Web unit tests | `npm test --workspace=apps/web` (Vitest; `test:watch` and `test:coverage` also available) |
 | End-to-end tests | `npx playwright test` (from `apps/web`; see `apps/web/package.json` `test:e2e`) |
 | Load/benchmark suite | `npm run benchmark` — requires [k6](https://k6.io/docs/get-started/installation/) and a running API; see [Benchmarks](#benchmarks) |
 
